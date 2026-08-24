@@ -131,6 +131,9 @@ public protocol WorkflowStepExecuting: Sendable {
         _ recoveryHandle: WorkflowRecoveryHandle,
         context: WorkflowCompensationContext
     ) async throws
+    /// Compensates a step that started executing but never journaled a handle.
+    /// Side-effecting steps must undo helper-owned state here; default is a no-op.
+    func compensateInFlight(context: WorkflowCompensationContext) async throws
 }
 
 public extension WorkflowStepExecuting {
@@ -139,6 +142,7 @@ public extension WorkflowStepExecuting {
         _ recoveryHandle: WorkflowRecoveryHandle,
         context: WorkflowCompensationContext
     ) async throws {}
+    func compensateInFlight(context: WorkflowCompensationContext) async throws {}
 }
 
 /// The engine depends on this minimal resolver rather than a concrete global

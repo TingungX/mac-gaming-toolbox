@@ -234,3 +234,32 @@ private func makeHandler(
         #expect(handlers.filter { $0.handles(request) }.count == 1)
     }
 }
+
+@Test func restoreActiveClearsTheCurrentLeaseWithoutACallerToken() throws {
+    let snapshotURL = try makeTemporarySnapshotURL()
+    defer { try? FileManager.default.removeItem(at: snapshotURL.deletingLastPathComponent()) }
+    let executor = FakePFCommandExecutor()
+    let handler = makeHandler(executor: executor, snapshotURL: snapshotURL)
+    _ = try handler.begin(runID: UUID(), leaseSeconds: 60)
+
+    let restored = try handler.restoreActive()
+    #expect(restored.didRestore)
+    #expect(!handler.hasActiveLease)
+
+    let noop = try handler.restoreActive()
+    #expect(!noop.didRestore)
+}
+
+@Test func persistedActiveLeaseIsRestoredWhenPFStateNoLongerMatches() throws {
+    let snapshotURL = try makeTemporarySnapshotURL()
+    defer { try? FileManager.default.removeItem(at: snapshotURL.deletingLastPathComponent()) }
+    let firstExecutor = FakePFCommandExecutor()
+    let firstHandler = makeHandler(executor: firstExecutor, snapshotURL: snapshotURL)
+    _ = try firstHandler.begin(runID: UUID(), leaseSeconds: 60)
+    #expect(firstHandler.hasActiveLease)
+
+    let rebootExecutor = FakePFCommandExecutor()
+    let restartedHandler = makeHandler(executor: rebootExecutor, snapshotURL: snapshotURL)
+    #expect(!restartedHandler.hasActiveLease)
+    #expect(rebootExecutor.invocations.contains(["-a", PFNetworkIsolationHandler.anchor, "-F", "all"]))
+}

@@ -69,6 +69,7 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
     private let journal: any WorkflowJournal
     private let engine: WorkflowEngine
     private let runsDirectory: URL
+    private let capabilityClient: any PrivilegedCapabilityOperating
 
     init(
         capabilityClient: any PrivilegedCapabilityOperating,
@@ -127,6 +128,7 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
         self.journal = journal
         self.engine = WorkflowEngine(registry: registry, journal: journal)
         self.runsDirectory = runsDirectory
+        self.capabilityClient = capabilityClient
     }
 
     func run(
@@ -165,6 +167,10 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
     func recoverIncompleteRuns(
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
     ) async throws -> [WorkflowRunResult] {
+        await update(GenshinWorkflowUpdate(stage: .recovering, progress: 0))
+        let orphanRestored = try await NetworkIsolationRecovery.restoreActive(
+            using: capabilityClient
+        )
         let runIDs = try await journal.incompleteRunIDs()
         var results: [WorkflowRunResult] = []
         for runID in runIDs {
@@ -172,6 +178,13 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
             results.append(try await engine.recover(
                 try Self.workflow(metalHUDEnabled: false),
                 runID: runID
+            ))
+        }
+        if results.isEmpty, orphanRestored {
+            results.append(WorkflowRunResult(
+                runID: UUID(),
+                workflowID: Self.workflowID,
+                status: .recovered
             ))
         }
         return results
@@ -507,6 +520,16 @@ private struct GenshinNetworkIsolationStep: WorkflowStepExecuting {
         try await capabilityClient.recover(try Self.capabilityHandle(from: recoveryHandle))
     }
 
+    func compensateInFlight(context: WorkflowCompensationContext) async throws {
+        if let runtime = await runtimeStore.optionalContext(for: context.runID) {
+            await runtime.stopLeaseRenewal()
+        }
+        _ = try await NetworkIsolationRecovery.restoreActive(
+            using: capabilityClient,
+            runID: context.runID
+        )
+    }
+
     private static func capabilityHandle(
         from handle: WorkflowRecoveryHandle
     ) throws -> CapabilityRecoveryHandle {
@@ -579,10 +602,37 @@ private struct GenshinReadinessStep: WorkflowStepExecuting {
                 case .waiting:
                     break
                 }
-            } else if !(await runtime.launchProcessIsRunning()), probe.targetPID == nil {
-                throw GenshinWorkflowCoordinatorError.gameExitedBeforeTrace
+            } else if !(await runtime.launchProcessIsRunning()) {
+                switch probe.finish() {
+                case .ready:
+                    return .completed
+                case .failed(let failure):
+                    throw GenshinWorkflowCoordinatorError.readinessFailed(failure)
+                case .waiting:
+                    break
+                }
+                if let pid = probe.targetPID {
+                    switch probe.processDidExit(pid: pid) {
+                    case .ready:
+                        return .completed
+                    case .failed(let failure):
+                        throw GenshinWorkflowCoordinatorError.readinessFailed(failure)
+                    case .waiting:
+                        throw GenshinWorkflowCoordinatorError.readinessFailed(.processExited)
+                    }
+                } else {
+                    throw GenshinWorkflowCoordinatorError.gameExitedBeforeTrace
+                }
             }
             try await Task.sleep(for: .milliseconds(100))
+        }
+        switch probe.finish() {
+        case .ready:
+            return .completed
+        case .failed(let failure):
+            throw GenshinWorkflowCoordinatorError.readinessFailed(failure)
+        case .waiting:
+            break
         }
         _ = probe.timeout()
         throw GenshinWorkflowCoordinatorError.readinessFailed(.timedOut)

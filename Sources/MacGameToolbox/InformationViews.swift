@@ -88,7 +88,10 @@ struct ChangelogView: View {
         NavigationStack {
             List {
                 Section("3.0.7") {
-                    Text(tr("HoYoGames 启动帮助部分功能修复", "Fixed parts of the HoYoGames Launch Assistant"))
+                    Text(tr("原神一键启动改为可恢复工作流：启动前短时隔离全机网络，检测到渲染线程后自动恢复", "Genshin one-click launch is now a recoverable workflow: it briefly isolates the network, then restores it after the render thread starts"))
+                    Text(tr("首页改为「启动程序」与「功能模块」；壁纸、教程和更新日志移入设置", "The dashboard now separates Launch Programs and Feature Modules; wallpaper, tutorials, and the changelog moved to Settings"))
+                    Text(tr("新增全局 Game Mode 开关；Wine 游戏可强制开启系统 Game Mode 并提升 CrossOver 进程优先级", "Added a global Game Mode switch so Wine games can force macOS Game Mode on and boost CrossOver processes"))
+                    Text(tr("取消、失败或 App 中断后会恢复网络隔离；空补偿栈不再被报告为已恢复", "Cancel, failure, and app interruption restore network isolation; an empty compensation stack is no longer reported as recovered"))
                 }
                 Section("3.0.6") {
                     Text(tr("移除默认挂载路径数量限制，支持添加任意数量的默认路径", "Removed the default mount-path limit, allowing any number of default paths to be added"))

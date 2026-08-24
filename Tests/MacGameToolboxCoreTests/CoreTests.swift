@@ -287,6 +287,20 @@ actor GameModeCommandRunner: CommandRunning {
     #expect(forcedOff == GameModeStatus(policy: .off, isEnabled: false))
 }
 
+@Test func gameModeSessionSwitchFollowsForcedOnPolicyNotCurrentState() throws {
+    let automaticButOn = try GameModeService.parseStatus(
+        "Game mode is on. Game mode enablement policy is automatic."
+    )
+    #expect(automaticButOn.policy == .automatic)
+    #expect(automaticButOn.isEnabled)
+
+    let forcedOnButReportedOff = try GameModeService.parseStatus(
+        "Game mode is off. Game mode is forced always on."
+    )
+    #expect(forcedOnButReportedOff.policy == .on)
+    #expect(!forcedOnButReportedOff.isEnabled)
+}
+
 @Test func perAppMetalHUDLaunchUsesScopedEnvironment() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let application = root.appendingPathComponent("Example Game.app", isDirectory: true)

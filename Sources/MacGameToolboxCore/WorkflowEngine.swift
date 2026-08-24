@@ -11,7 +11,7 @@ public actor WorkflowEngine {
     private struct CompensationEntry: Sendable {
         let definition: WorkflowStepDefinition
         let executor: any WorkflowStepExecuting
-        let recoveryHandle: WorkflowRecoveryHandle
+        let recoveryHandle: WorkflowRecoveryHandle?
     }
 
     private struct StepFailure: Error, Sendable {
@@ -226,6 +226,9 @@ public actor WorkflowEngine {
                 )
 
                 try Task.checkCancellation()
+                // Persist stepStarted before side effects. Recovery treats an
+                // unmatched stepStarted as in-flight compensation, covering the
+                // window before a recovery handle exists.
                 snapshot = try await record(
                     snapshot,
                     kind: .stepStarted,
@@ -239,11 +242,9 @@ public actor WorkflowEngine {
                 } catch {
                     let stepError = error as? WorkflowStepExecutionError
                     let handle = stepError?.recoveryHandle
-                    if let handle {
-                        compensationStack.append(
-                            CompensationEntry(definition: definition, executor: executor, recoveryHandle: handle)
-                        )
-                    }
+                    compensationStack.append(
+                        CompensationEntry(definition: definition, executor: executor, recoveryHandle: handle)
+                    )
                     let cancelled = error is CancellationError || Task.isCancelled
                     do {
                         snapshot = try await record(
@@ -394,16 +395,29 @@ public actor WorkflowEngine {
             .filter { $0.kind == .stepSucceeded }
             .compactMap(\.stepID)
 
-        var outstanding: [(stepID: WorkflowStepID, handle: WorkflowRecoveryHandle)] = []
+        var outstanding: [(stepID: WorkflowStepID, handle: WorkflowRecoveryHandle?)] = []
         for event in events {
             switch event.kind {
+            case .stepStarted:
+                guard let stepID = event.stepID else { continue }
+                outstanding.removeAll { $0.stepID == stepID && $0.handle == nil }
+                outstanding.append((stepID, nil))
             case .stepSucceeded, .stepFailed:
-                guard let stepID = event.stepID, let handle = event.recoveryHandle else { continue }
-                outstanding.removeAll { $0.handle.tokenID == handle.tokenID }
-                outstanding.append((stepID, handle))
+                guard let stepID = event.stepID else { continue }
+                outstanding.removeAll { $0.stepID == stepID && $0.handle == nil }
+                if let handle = event.recoveryHandle {
+                    outstanding.removeAll { $0.handle?.tokenID == handle.tokenID }
+                    outstanding.append((stepID, handle))
+                } else if event.kind == .stepFailed {
+                    outstanding.append((stepID, nil))
+                }
             case .compensationSucceeded:
-                guard let handle = event.recoveryHandle else { continue }
-                outstanding.removeAll { $0.handle.tokenID == handle.tokenID }
+                if let handle = event.recoveryHandle {
+                    outstanding.removeAll { $0.handle?.tokenID == handle.tokenID }
+                }
+                if let stepID = event.stepID {
+                    outstanding.removeAll { $0.stepID == stepID && $0.handle == nil }
+                }
             default:
                 continue
             }
@@ -550,7 +564,11 @@ public actor WorkflowEngine {
 
             var compensationError: Error?
             do {
-                try await entry.executor.compensate(entry.recoveryHandle, context: context)
+                if let handle = entry.recoveryHandle {
+                    try await entry.executor.compensate(handle, context: context)
+                } else {
+                    try await entry.executor.compensateInFlight(context: context)
+                }
             } catch let error {
                 compensationError = error
                 failures.append(

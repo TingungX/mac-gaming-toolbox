@@ -195,3 +195,10 @@ private func genshinCreateLines(launcherThread: String, pid: String, tid: String
     #expect(finalLineParser.append(partial).isEmpty)
     #expect(finalLineParser.finish() == [.threadNamed(pid: 0x798, name: .unityGfxDeviceWorker)])
 }
+
+@Test func readinessProbeFlushingAnUnterminatedRenderLineBecomesReady() throws {
+    var probe = try GenshinReadinessProbe(targetPID: 0x798)
+    #expect(probe.append(genshinModuleLine) == .waiting)
+    #expect(probe.append(String(renderThreadLine.dropLast())) == .waiting)
+    #expect(probe.finish() == .ready)
+}

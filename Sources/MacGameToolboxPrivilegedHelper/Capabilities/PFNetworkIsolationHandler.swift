@@ -334,6 +334,22 @@ final class PFNetworkIsolationHandler {
         return PFNetworkIsolationBeginResult(recoveryToken: token, deadline: current.deadline)
     }
 
+    /// Restores the current project-owned lease without requiring the App to
+    /// present a recovery handle. A no-op when no lease is active.
+    func restoreActive() throws -> (didRestore: Bool, recoveryToken: PFNetworkIsolationRecoveryToken, deadline: Date) {
+        guard isRunningAsRoot() else { throw PFNetworkIsolationError.notRoot }
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let current = snapshot, current.phase != .restored else {
+            let token = snapshot.flatMap(recoveryToken) ?? PFNetworkIsolationRecoveryToken(tokenID: UUID())
+            return (false, token, Date())
+        }
+        let token = recoveryToken(from: current) ?? PFNetworkIsolationRecoveryToken(tokenID: current.tokenID)
+        try restoreLocked(current, expectedRunID: current.runID, expectedToken: nil)
+        return (true, token, current.deadline)
+    }
+
     /// Compensation from the formal capability envelope carries only its UUID
     /// token ID. The snapshot supplies the run identity and the digest check
     /// still prevents an arbitrary token from reaching PF.
@@ -376,8 +392,27 @@ final class PFNetworkIsolationHandler {
                     lock.unlock()
                 }
             } else {
-                scheduleExpiryTimerLocked(for: persisted)
-                lock.unlock()
+                do {
+                    try verifyIsolationActive()
+                    scheduleExpiryTimerLocked(for: persisted)
+                    lock.unlock()
+                } catch {
+                    capabilityLogger.error(
+                        "PF persisted lease is active but current PF state does not match: \(error.localizedDescription, privacy: .public)"
+                    )
+                    do {
+                        try restoreLocked(
+                            persisted,
+                            expectedRunID: persisted.runID,
+                            expectedToken: recoveryToken(from: persisted)
+                        )
+                        lock.unlock()
+                    } catch {
+                        capabilityLogger.error("PF reboot-state restore failed: \(error.localizedDescription, privacy: .public)")
+                        scheduleRecoveryRetryLocked()
+                        lock.unlock()
+                    }
+                }
             }
         } catch {
             capabilityLogger.error("PF snapshot ignored: \(error.localizedDescription, privacy: .public)")
@@ -695,6 +730,7 @@ final class PFNetworkIsolationCapabilityAdapter: PrivilegedCapabilityHandling, @
     func invoke(_ invocation: CapabilityInvocationEnvelope) async throws -> CapabilityResultEnvelope {
         let payload = try JSONDecoder().decode(NetworkIsolationInput.self, from: invocation.inputPayload)
         let result: PFNetworkIsolationBeginResult
+        let restored: Bool
         switch payload.action {
         case .begin:
             guard payload.tokenID == nil else {
@@ -704,6 +740,7 @@ final class PFNetworkIsolationCapabilityAdapter: PrivilegedCapabilityHandling, @
                 runID: invocation.runID,
                 leaseSeconds: TimeInterval(payload.leaseSeconds)
             )
+            restored = false
         case .renew:
             guard let tokenID = payload.tokenID else {
                 throw PFNetworkIsolationError.invalidRecoveryToken
@@ -713,8 +750,18 @@ final class PFNetworkIsolationCapabilityAdapter: PrivilegedCapabilityHandling, @
                 tokenID: tokenID,
                 leaseSeconds: TimeInterval(payload.leaseSeconds)
             )
+            restored = false
+        case .restoreActive:
+            let restoredResult = try handler.restoreActive()
+            restored = restoredResult.didRestore
+            result = PFNetworkIsolationBeginResult(
+                recoveryToken: restoredResult.recoveryToken,
+                deadline: restoredResult.deadline
+            )
         }
-        let output = try JSONEncoder().encode(NetworkIsolationOutput(deadline: result.deadline))
+        let output = try JSONEncoder().encode(
+            NetworkIsolationOutput(deadline: result.deadline, restored: restored)
+        )
         return CapabilityResultEnvelope(
             runID: invocation.runID,
             stepID: invocation.stepID,

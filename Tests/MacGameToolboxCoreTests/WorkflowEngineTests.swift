@@ -60,6 +60,13 @@ private actor WorkflowTestStep: WorkflowStepExecuting {
             throw compensationFailure
         }
     }
+
+    func compensateInFlight(context: WorkflowCompensationContext) async throws {
+        await recorder.append("\(id).compensateInFlight.\(context.reason.rawValue)")
+        if let compensationFailure {
+            throw compensationFailure
+        }
+    }
 }
 
 private struct WorkflowTestError: Error, LocalizedError, Sendable {
@@ -161,7 +168,7 @@ private func waitForActiveRun(_ engine: WorkflowEngine) async throws -> Workflow
     let compensationSteps = try await journal.events(for: runID)
         .filter { $0.kind == .compensationStarted }
         .compactMap(\.stepID)
-    #expect(compensationSteps == ["second", "first"])
+    #expect(compensationSteps == ["failing", "second", "first"])
 }
 
 @Test func workflowEngineCancellationCompensatesAndReportsCancelled() async throws {
@@ -323,4 +330,67 @@ private func waitForActiveRun(_ engine: WorkflowEngine) async throws -> Workflow
     #expect(await reader.events(for: runID).count == 1)
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+}
+
+@Test func workflowEngineRecoversInFlightStepStartedWithoutHandle() async throws {
+    let journal = InMemoryWorkflowJournal()
+    let runID = UUID()
+    try await journal.append(WorkflowJournalEvent(
+        runID: runID,
+        workflowID: "test.workflow",
+        kind: .stepStarted,
+        status: .running,
+        stepID: "isolate"
+    ))
+
+    let recorder = WorkflowEventRecorder()
+    let isolate = WorkflowTestStep(id: "isolate", recorder: recorder)
+    let engine = makeEngine(steps: ["isolate": isolate], journal: journal)
+    let result = try await engine.recover(makeWorkflow(stepIDs: ["isolate"]), runID: runID)
+
+    #expect(result.status == .recovered)
+    #expect(await recorder.events == ["isolate.compensateInFlight.recovery"])
+    #expect(try await journal.incompleteRunIDs().isEmpty)
+}
+
+@Test func workflowEngineDoesNotReportRecoveredWhenInFlightCompensationFails() async throws {
+    let journal = InMemoryWorkflowJournal()
+    let runID = UUID()
+    try await journal.append(WorkflowJournalEvent(
+        runID: runID,
+        workflowID: "test.workflow",
+        kind: .stepStarted,
+        status: .running,
+        stepID: "isolate"
+    ))
+
+    let isolate = WorkflowTestStep(
+        id: "isolate",
+        compensationFailure: WorkflowTestError(message: "helper still isolated")
+    )
+    let engine = makeEngine(steps: ["isolate": isolate], journal: journal)
+    let result = try await engine.recover(makeWorkflow(stepIDs: ["isolate"]), runID: runID)
+
+    #expect(result.status == .recoveryFailed)
+    #expect(result.compensationFailures.first?.stepID == "isolate")
+}
+
+@Test func workflowEngineCompensatesExecuteFailureWithoutHandle() async throws {
+    let journal = InMemoryWorkflowJournal()
+    let recorder = WorkflowEventRecorder()
+    let isolate = WorkflowTestStep(
+        id: "isolate",
+        recorder: recorder,
+        executionFailure: WorkflowStepExecutionError(message: "invoke lost")
+    )
+    let engine = makeEngine(steps: ["isolate": isolate], journal: journal)
+
+    let result = try await engine.run(makeWorkflow(stepIDs: ["isolate"]))
+
+    #expect(result.status == .failed)
+    #expect(await recorder.events == [
+        "isolate.prepare",
+        "isolate.execute",
+        "isolate.compensateInFlight.failure"
+    ])
 }

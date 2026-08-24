@@ -17,6 +17,8 @@ final class AppModel: ObservableObject {
     @Published var gameModeEnabled = false
     @Published var gameModeAvailable = false
     @Published var gameModePolicy: GameModePolicy?
+    @Published var gameModeUnavailableReason: String?
+    @Published var isGameModeBusy = false
     @Published var cacheScan: CacheScan?
     @Published var showingDiskManager = false
     @Published var showingCacheConfirmation = false
@@ -52,14 +54,6 @@ final class AppModel: ObservableObject {
             catch { report(error) }
             metalHUDEnabled = await application.metalHUDEnabled()
             do {
-                let gameMode = try await application.gameModeStatus()
-                gameModeAvailable = true
-                gameModeEnabled = gameMode.isEnabled
-                gameModePolicy = gameMode.policy
-            } catch {
-                DiagnosticFileLogger.write("Game Mode unavailable: \(error.localizedDescription)")
-            }
-            do {
                 try await application.cleanLegacyHoYoStateIfNeeded()
             } catch {
                 DiagnosticFileLogger.write("Legacy HoYo state cleanup failed: \(error.localizedDescription)")
@@ -71,6 +65,19 @@ final class AppModel: ObservableObject {
                 )))
             } else {
                 await recoverIncompleteGameWorkflows()
+            }
+            do {
+                let gameMode = try await application.gameModeStatus()
+                gameModeAvailable = true
+                gameModeUnavailableReason = nil
+                gameModePolicy = gameMode.policy
+                gameModeEnabled = gameMode.policy == .on
+            } catch {
+                gameModeAvailable = false
+                gameModeEnabled = false
+                gameModePolicy = nil
+                gameModeUnavailableReason = error.localizedDescription
+                DiagnosticFileLogger.write("Game Mode unavailable: \(error.localizedDescription)")
             }
             startAutomaticMountMonitoring()
         }
@@ -85,8 +92,11 @@ final class AppModel: ObservableObject {
     }
 
     func toggleGameMode() {
+        guard gameModeAvailable, !isGameModeBusy else { return }
+        isGameModeBusy = true
         if gameModeEnabled {
             runTask(tr("正在恢复 Game Mode 自动策略", "Restoring automatic Game Mode policy")) {
+                defer { self.isGameModeBusy = false }
                 try await self.application.setGameModePolicy(.automatic)
                 self.gameModeEnabled = false
                 self.gameModePolicy = .automatic
@@ -96,6 +106,7 @@ final class AppModel: ObservableObject {
         }
 
         runTask(tr("正在开启 Game Mode", "Enabling Game Mode")) {
+            defer { self.isGameModeBusy = false }
             try await self.application.setGameModePolicy(.on)
             let processCount: Int
             do {
@@ -210,7 +221,7 @@ final class AppModel: ObservableObject {
             } catch is CancellationError {
                 status = TaskStatus(
                     phase: .cancelled,
-                    message: tr("已取消，网络恢复完成", "Cancelled after network restoration")
+                    message: tr("已取消", "Cancelled")
                 )
             } catch {
                 report(error)
@@ -221,7 +232,6 @@ final class AppModel: ObservableObject {
     }
 
     func cancelGenshinWorkflow() {
-        genshinTask?.cancel()
         Task { await genshinWorkflow.cancel() }
     }
 

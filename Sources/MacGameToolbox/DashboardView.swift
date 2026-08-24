@@ -189,24 +189,41 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private var moduleCards: some View {
-        FeatureCard(icon: "gamecontroller.fill", title: tr("Game Mode", "Game Mode"), subtitle: tr("全局开启 macOS Game Mode，并提升已识别的 CrossOver/Wine 进程优先级", "Force macOS Game Mode on globally and boost detected CrossOver/Wine processes")) {
-            HStack(alignment: .bottom) {
-                if model.gameModeAvailable {
-                    Button(model.gameModeEnabled
-                           ? tr("关闭并恢复自动", "Disable and restore auto")
-                           : tr("开启 Game Mode", "Enable Game Mode")) {
-                        model.toggleGameMode()
+        FeatureCard(icon: "flag.checkered", title: tr("Game Mode", "Game Mode"), subtitle: tr("全局开启 macOS Game Mode，并提升已识别的 CrossOver/Wine 进程优先级", "Force macOS Game Mode on globally and boost detected CrossOver/Wine processes")) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .bottom) {
+                    if model.gameModeAvailable {
+                        Button(model.gameModeEnabled
+                               ? tr("关闭并恢复自动", "Disable and restore auto")
+                               : tr("开启 Game Mode", "Enable Game Mode")) {
+                            model.toggleGameMode()
+                        }
+                        .liquidGlassButton(prominent: !model.gameModeEnabled)
+                        .disabled(model.isGameModeBusy)
+                    } else {
+                        Label(tr("当前系统不可用", "Unavailable on this system"), systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
                     }
-                    .liquidGlassButton(prominent: !model.gameModeEnabled)
-                } else {
-                    Label(tr("当前系统不可用", "Unavailable on this system"), systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if model.gameModeAvailable {
+                        Text(gameModePolicyCaption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
-                if model.gameModeAvailable {
-                    Text(model.gameModeEnabled ? tr("已开启", "On") : tr("自动", "Auto"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if !model.gameModeAvailable {
+                    Text(tr(
+                        "需要本机提供 gamepolicyctl（通常随 Xcode 或命令行工具安装）。未找到该命令时不会改写系统策略。",
+                        "Requires gamepolicyctl on this Mac, usually from Xcode or Command Line Tools. The app will not guess a system policy if the command is missing."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    if let reason = model.gameModeUnavailableReason {
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }
@@ -251,6 +268,17 @@ struct DashboardView: View {
         }
         FeatureCard(icon: "rectangle.2.swap", title: tr("切换到SteamDeck模式", "Switch to SteamDeck Mode"), subtitle: tr("部分游戏反作弊只给SteamDeck后门，伪装成SteamDeck让Mac也能玩", "Some anti-cheat systems allow SteamDeck; impersonating one may let the game run on Mac")) {
             Button(tr("切换模式", "Toggle mode")) { model.toggleSteamDeck() }
+        }
+    }
+
+    private var gameModePolicyCaption: String {
+        switch model.gameModePolicy {
+        case .on:
+            tr("全局强制开启", "Forced on globally")
+        case .off:
+            tr("已关闭", "Off")
+        case .automatic, nil:
+            tr("自动", "Auto")
         }
     }
 
