@@ -22,6 +22,10 @@ let package = Package(
             dependencies: ["MacGameToolboxCore"],
             linkerSettings: [.linkedFramework("Security")]
         ),
-        .testTarget(name: "MacGameToolboxCoreTests", dependencies: ["MacGameToolboxCore"])
+        .testTarget(name: "MacGameToolboxCoreTests", dependencies: ["MacGameToolboxCore"]),
+        .testTarget(
+            name: "MacGameToolboxPrivilegedHelperTests",
+            dependencies: ["MacGameToolboxCore", "MacGameToolboxPrivilegedHelper"]
+        )
     ]
 )

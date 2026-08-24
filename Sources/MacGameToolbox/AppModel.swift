@@ -20,30 +20,24 @@ final class AppModel: ObservableObject {
     @Published var cacheConfirmationStage = 0
     @Published var showingChangelog = false
     @Published var showingTutorials = false
-    @Published var isHoYoAssistantRunning = false
+    @Published var showingGenshinConfiguration = false
+    @Published var isGenshinWorkflowRunning = false
     @Published var showingProcessSelection = false
     @Published var runningProcesses: [SystemProcess] = []
     @Published var selectedProcessIDs = Set<Int32>()
 
-    private let privileged = PrivilegedHelperClient()
-    private let configurationStore: ConfigurationStore
-    private let diskService: DiskService
-    private let gamingService: GamingService
-    private let hostnameService: HostnameService
-    private let cacheService: CacheService
-    private let wallpaperService: WallpaperService
+    private let application: any ToolboxApplicationCoordinating
+    private let genshinWorkflow: any GenshinWorkflowCoordinating
+    private let workflowInitializationError: String?
     private let diagnosticsService = DiagnosticsService()
-    private var hoyoTask: Task<Void, Never>?
+    private var genshinTask: Task<Void, Never>?
     private var automaticMountTask: Task<Void, Never>?
     private var didLaunch = false
 
-    init() {
-        configurationStore = ConfigurationStore()
-        diskService = DiskService()
-        gamingService = GamingService(privileged: privileged)
-        hostnameService = HostnameService(privileged: privileged)
-        cacheService = CacheService(privileged: privileged)
-        wallpaperService = WallpaperService()
+    init(dependencies: AppDependencies) {
+        application = dependencies.application
+        genshinWorkflow = dependencies.genshinWorkflow
+        workflowInitializationError = dependencies.workflowInitializationError
         launch()
     }
 
@@ -52,11 +46,21 @@ final class AppModel: ObservableObject {
         didLaunch = true
         DiagnosticFileLogger.write("App launched, version 3.0.7")
         Task {
-            do { configuration = try await configurationStore.load() }
+            do { configuration = try await application.loadConfiguration() }
             catch { report(error) }
-            metalHUDEnabled = await gamingService.metalHUDEnabled()
-            if (try? String(contentsOfFile: "/etc/hosts", encoding: .utf8))?.contains("# BEGIN MAC GAME TOOLBOX HOYO") == true {
-                await gamingService.cleanStaleHoYoEntries()
+            metalHUDEnabled = await application.metalHUDEnabled()
+            do {
+                try await application.cleanLegacyHoYoStateIfNeeded()
+            } catch {
+                DiagnosticFileLogger.write("Legacy HoYo state cleanup failed: \(error.localizedDescription)")
+            }
+            if let workflowInitializationError {
+                report(ToolboxError.commandFailed(tr(
+                    "工作流日志无法初始化：\(workflowInitializationError)",
+                    "Workflow journal could not be initialized: \(workflowInitializationError)"
+                )))
+            } else {
+                await recoverIncompleteGameWorkflows()
             }
             startAutomaticMountMonitoring()
         }
@@ -64,7 +68,7 @@ final class AppModel: ObservableObject {
 
     func setMetalHUD(_ enabled: Bool) {
         runTask(tr("正在更新 MetalHUD", "Updating MetalHUD")) {
-            try await self.gamingService.setMetalHUD(enabled: enabled)
+            try await self.application.setMetalHUD(enabled: enabled)
             self.metalHUDEnabled = enabled
             return enabled ? tr("MetalHUD 已开启", "MetalHUD enabled") : tr("MetalHUD 已关闭", "MetalHUD disabled")
         }
@@ -88,7 +92,7 @@ final class AppModel: ObservableObject {
     func launchRecordedAppWithMetalHUD(_ path: String) {
         let applicationURL = URL(fileURLWithPath: path)
         runTask(tr("正在使用 MetalHUD 启动 App", "Launching app with MetalHUD")) {
-            try await self.gamingService.launchWithMetalHUD(applicationPath: applicationURL.path)
+            try await self.application.launchWithMetalHUD(applicationPath: applicationURL.path)
             self.rememberMetalHUDApp(applicationURL)
             return tr("已使用 MetalHUD 打开 \(applicationURL.deletingPathExtension().lastPathComponent)", "Opened \(applicationURL.deletingPathExtension().lastPathComponent) with MetalHUD")
         }
@@ -101,14 +105,10 @@ final class AppModel: ObservableObject {
 
     func increaseCrossOverPriority() {
         runTask(tr("正在检测 CrossOver", "Detecting CrossOver")) {
-            let processes = try await self.gamingService.wineProcesses(crossOverOnly: true)
-            DiagnosticFileLogger.write("Detected CrossOver process count: \(processes.count)")
-            guard !processes.isEmpty else {
-                throw ToolboxError.commandFailed(tr("未检测到 CrossOver 或 Wine 进程", "No CrossOver or Wine process found"))
-            }
             self.status.phase = .awaitingAuthorization
-            try await self.privileged.perform(.renice(processes.map(\.pid)))
-            return tr("已提高 \(processes.count) 个进程的优先级", "Updated \(processes.count) processes")
+            let count = try await self.application.prioritizeCrossOverProcesses()
+            DiagnosticFileLogger.write("Prioritized CrossOver process count: \(count)")
+            return tr("已提高 \(count) 个进程的优先级", "Updated \(count) processes")
         }
     }
 
@@ -117,7 +117,7 @@ final class AppModel: ObservableObject {
         runningProcesses = []
         selectedProcessIDs.removeAll()
         Task {
-            do { runningProcesses = try await gamingService.runningProcesses() }
+            do { runningProcesses = try await application.runningProcesses() }
             catch { report(error) }
         }
     }
@@ -128,71 +128,92 @@ final class AppModel: ObservableObject {
         showingProcessSelection = false
         runTask(tr("正在提高所选进程优先级", "Increasing selected process priority")) {
             self.status.phase = .awaitingAuthorization
-            try await self.privileged.perform(.renice(identifiers))
+            try await self.application.prioritizeProcesses(identifiers)
             return tr("已提高 \(identifiers.count) 个进程的优先级", "Updated \(identifiers.count) selected process(es)")
         }
     }
 
-    func setHoYoWaitSeconds(_ seconds: Int) {
-        guard [10, 15, 20].contains(seconds) else { return }
-        configuration.hoYoWaitSeconds = seconds
-        saveConfiguration()
+    var genshinInstallation: GameInstallation? {
+        configuration.gameInstallations.first { $0.id == GenshinWorkflowCoordinator.installationID }
     }
 
-    func startHoYoAssistant() {
-        guard hoyoTask == nil else { return }
-        let waitSeconds = configuration.hoYoWaitSeconds
-        isHoYoAssistantRunning = true
-        status = TaskStatus(phase: .awaitingAuthorization, message: tr("正在启用系统辅助服务", "Enabling system helper"), progress: 0, log: [])
-        hoyoTask = Task {
+    func startGenshinWorkflow() {
+        guard genshinTask == nil else { return }
+        guard let installation = genshinInstallation else {
+            showingGenshinConfiguration = true
+            return
+        }
+
+        isGenshinWorkflowRunning = true
+        status = TaskStatus(
+            phase: .awaitingAuthorization,
+            message: tr("正在准备原神启动流程", "Preparing the Genshin launch workflow"),
+            progress: 0,
+            log: []
+        )
+        genshinTask = Task { [self] in
             do {
-                try await gamingService.beginHoYoLaunch()
-                status.phase = .running
-                status.log.append(tr("已写入临时 hosts，并绕过系统代理", "Temporary hosts applied; system proxy bypassed for launch domains"))
-                for remaining in stride(from: waitSeconds, through: 1, by: -1) {
-                    try Task.checkCancellation()
-                    status.message = tr("请启动游戏，剩余 \(remaining) 秒", "Launch the game; \(remaining) seconds remaining")
-                    status.progress = Double(waitSeconds - remaining) / Double(waitSeconds)
-                    try await Task.sleep(for: .seconds(1))
+                let result = try await genshinWorkflow.run(
+                    installation: installation,
+                    metalHUDEnabled: metalHUDEnabled
+                ) { update in
+                    await self.applyGenshinWorkflowUpdate(update)
                 }
-
-                try Task.checkCancellation()
-                status.message = tr("正在检测 Wine 进程", "Detecting Wine processes")
-                status.log.append(tr("等待完成，开始检测 Wine 进程", "Wait complete; detecting Wine processes"))
-                let processes = try await gamingService.wineProcesses()
-                DiagnosticFileLogger.write("HoYo Wine check after \(waitSeconds) seconds: \(processes.count) process(es)")
-                guard !processes.isEmpty else {
-                    throw ToolboxError.commandFailed(tr("\(waitSeconds) 秒后未检测到 Wine 进程", "No Wine process detected after \(waitSeconds) seconds"))
-                }
-
-                status.phase = .awaitingAuthorization
-                try await privileged.perform(.renice(processes.map(\.pid)))
-                try await gamingService.finishHoYoLaunch()
-                status = TaskStatus(
-                    phase: .succeeded,
-                    message: tr("已优化 \(processes.count) 个进程并恢复 hosts 与代理绕过", "Updated \(processes.count) processes and restored hosts and proxy bypass"),
-                    progress: 1,
-                    log: status.log
-                )
+                applyGenshinWorkflowResult(result)
             } catch is CancellationError {
-                try? await gamingService.finishHoYoLaunch()
-                status = TaskStatus(phase: .cancelled, message: tr("已取消并恢复 hosts 与代理绕过", "Cancelled and restored hosts and proxy bypass"))
+                status = TaskStatus(
+                    phase: .cancelled,
+                    message: tr("已取消，网络恢复完成", "Cancelled after network restoration")
+                )
             } catch {
-                try? await gamingService.finishHoYoLaunch()
                 report(error)
             }
-            hoyoTask = nil
-            isHoYoAssistantRunning = false
+            genshinTask = nil
+            isGenshinWorkflowRunning = false
         }
     }
 
-    func cancelHoYoAssistant() { hoyoTask?.cancel() }
+    func cancelGenshinWorkflow() {
+        genshinTask?.cancel()
+        Task { await genshinWorkflow.cancel() }
+    }
+
+    func saveGenshinInstallation(_ binding: CrossOverGameBinding) {
+        do {
+            let validated = try CrossOverLaunchConfiguration(
+                crossOverAppURL: URL(fileURLWithPath: binding.applicationPath),
+                bottle: binding.bottleName,
+                executablePath: binding.executablePath,
+                workingDirectoryPath: binding.workingDirectoryPath
+            )
+            guard FileManager.default.fileExists(atPath: validated.crossOverApp.url.path),
+                  FileManager.default.isExecutableFile(atPath: validated.crossOverApp.cxstartURL.path) else {
+                throw ToolboxError.invalidPath(binding.applicationPath)
+            }
+            let installation = GameInstallation(
+                id: GenshinWorkflowCoordinator.installationID,
+                displayName: tr("原神", "Genshin Impact"),
+                launchBinding: .crossOver(binding)
+            )
+            configuration.gameInstallations.removeAll { $0.id == installation.id }
+            configuration.gameInstallations.append(installation)
+            saveConfiguration()
+            showingGenshinConfiguration = false
+            status = TaskStatus(
+                phase: .succeeded,
+                message: tr("原神启动配置已保存", "Genshin launch configuration saved"),
+                progress: 1
+            )
+        } catch {
+            report(error)
+        }
+    }
 
     func loadDisks() {
         showingDiskManager = true
         Task {
             do {
-                disks = try await diskService.listEligibleVolumes()
+                disks = try await application.eligibleVolumes()
                 for preset in configuration.diskPresets { if let path = preset.mountPath { diskPaths[preset.diskIdentifier] = path } }
             } catch { report(error) }
         }
@@ -217,10 +238,8 @@ final class AppModel: ObservableObject {
             return
         }
         runTask(tr("正在挂载磁盘", "Mounting volumes")) {
-            for (_, path) in assignments {
-                if !FileManager.default.fileExists(atPath: path) { try await self.privileged.perform(.createDirectory(path)) }
-            }
-            let results = await self.diskService.mountBatch(assignments)
+            self.status.phase = .awaitingAuthorization
+            let results = try await self.application.mount(assignments, creatingDirectories: true)
             let failures = results.compactMap { key, result -> String? in if case .failure = result { return key }; return nil }
             guard failures.isEmpty else { throw ToolboxError.commandFailed(tr("挂载失败并已回滚：\(failures.joined(separator: ", "))", "Mount failed and rolled back: \(failures.joined(separator: ", "))")) }
             self.rememberRestorableMounts(assignments)
@@ -230,7 +249,7 @@ final class AppModel: ObservableObject {
 
     func restoreSelectedDisks() {
         runTask(tr("正在恢复默认挂载", "Restoring default mounts")) {
-            for identifier in self.selectedDiskIDs { try await self.diskService.restoreDefaultMount(identifier) }
+            try await self.application.restoreDefaultMounts(self.selectedDiskIDs)
             let selectedUUIDs = Set(self.disks.filter { self.selectedDiskIDs.contains($0.id) }.compactMap(\.volumeUUID))
             self.configuration.restorableDiskMounts.removeAll {
                 self.selectedDiskIDs.contains($0.diskIdentifier) || ($0.volumeUUID.map(selectedUUIDs.contains) ?? false)
@@ -262,7 +281,7 @@ final class AppModel: ObservableObject {
         status = TaskStatus(phase: .running, message: tr("正在恢复上次挂载", "Restoring previous mounts"))
         Task {
             do {
-                let availableVolumes = try await diskService.listEligibleVolumes()
+                let availableVolumes = try await application.eligibleVolumes()
                 disks = availableVolumes
                 enrichRestorableMountUUIDs(from: availableVolumes)
                 guard !configuration.restorableDiskMounts.isEmpty else {
@@ -301,15 +320,13 @@ final class AppModel: ObservableObject {
         panel.prompt = tr("导入", "Import")
         guard panel.runModal() == .OK, let source = panel.url else { return }
 
-        do {
-            let oldPath = configuration.customWallpaperPath
-            let destination = try wallpaperService.importWallpaper(from: source, replacing: oldPath)
-            configuration.customWallpaperPath = destination.path
-            saveConfiguration()
-            status = TaskStatus(phase: .succeeded, message: tr("已导入自定义背景", "Custom wallpaper imported"), progress: 1)
+        runTask(tr("正在导入自定义背景", "Importing custom wallpaper")) {
+            let oldPath = self.configuration.customWallpaperPath
+            let destination = try await self.application.importWallpaper(from: source, replacing: oldPath)
+            self.configuration.customWallpaperPath = destination.path
+            self.saveConfiguration()
             DiagnosticFileLogger.write("Custom wallpaper imported: \(destination.path)")
-        } catch {
-            report(error)
+            return tr("已导入自定义背景", "Custom wallpaper imported")
         }
     }
 
@@ -317,19 +334,17 @@ final class AppModel: ObservableObject {
         let oldPath = configuration.customWallpaperPath
         configuration.customWallpaperPath = nil
         saveConfiguration()
-        do {
-            let removed = try wallpaperService.removeManagedWallpaper(at: oldPath)
+        runTask(tr("正在恢复默认背景", "Restoring default wallpaper")) {
+            let removed = try await self.application.removeManagedWallpaper(at: oldPath)
             DiagnosticFileLogger.write("Custom wallpaper cleared; removed file: \(removed)")
-        } catch {
-            DiagnosticFileLogger.write("Custom wallpaper cleared; failed to remove file: \(error.localizedDescription)")
+            return tr("已恢复默认背景", "Default background restored")
         }
-        status = TaskStatus(phase: .succeeded, message: tr("已恢复默认背景", "Default background restored"), progress: 1)
     }
 
     func prepareCacheScan() {
         status = TaskStatus(phase: .running, message: tr("正在扫描缓存", "Scanning caches"))
         Task {
-            cacheScan = await cacheService.scan(excludingSensitiveFiles: configuration.excludesSensitiveCacheFiles)
+            cacheScan = await application.scanCaches(excludingSensitiveFiles: configuration.excludesSensitiveCacheFiles)
             cacheConfirmationStage = 1
             showingCacheConfirmation = true
             status = TaskStatus()
@@ -345,7 +360,7 @@ final class AppModel: ObservableObject {
         guard let scan = cacheScan else { return }
         runTask(tr("正在清理缓存", "Cleaning caches")) {
             if !scan.systemTargets.isEmpty { self.status.phase = .awaitingAuthorization }
-            try await self.cacheService.clear(scan)
+            try await self.application.clearCaches(scan)
             return tr("缓存清理完成", "Cache cleaning completed")
         }
     }
@@ -357,18 +372,18 @@ final class AppModel: ObservableObject {
 
     func toggleSteamDeck() {
         runTask(tr("正在读取设备名称", "Reading hostnames")) {
-            let current = try await self.hostnameService.current()
+            let current = try await self.application.currentHostnames()
             self.status.phase = .awaitingAuthorization
             if current.computerName == "steamdeck" {
                 guard let backup = self.configuration.hostnameBackup else { throw ToolboxError.commandFailed(tr("找不到原始设备名称备份", "Hostname backup is missing")) }
-                try await self.hostnameService.restore(backup)
+                try await self.application.restoreHostnames(backup)
                 self.configuration.hostnameBackup = nil
                 self.saveConfiguration()
                 return tr("已恢复原始设备名称", "Original hostnames restored")
             }
             self.configuration.hostnameBackup = current
             self.saveConfiguration()
-            try await self.hostnameService.setSteamDeck()
+            try await self.application.enableSteamDeckHostnames()
             return tr("已切换至 SteamDeck 模式", "SteamDeck mode enabled")
         }
     }
@@ -386,7 +401,7 @@ final class AppModel: ObservableObject {
     func repairCoreFeatures() {
         runTask(tr("正在修复核心功能", "Repairing core features")) {
             self.status.phase = .awaitingAuthorization
-            try await Self.runCoreFeatureRepairScript()
+            try await self.application.repairCoreFeatures()
             return tr("核心功能已修复", "Core features repaired")
         }
     }
@@ -394,7 +409,6 @@ final class AppModel: ObservableObject {
     func exportDiagnostics(to destination: URL) {
         let currentStatus = status
         let currentConfiguration = configuration
-        let helperStatus = privileged.diagnosticStatus()
         status = TaskStatus(phase: .running, message: tr("正在收集诊断日志", "Collecting diagnostics"))
         DiagnosticFileLogger.write("Diagnostics export started: \(destination.path)")
         do {
@@ -404,6 +418,7 @@ final class AppModel: ObservableObject {
             return
         }
         Task {
+            let helperStatus = await application.helperDiagnosticStatus()
             let diagnosticsText = await diagnosticsService.collect(taskStatus: currentStatus, helperStatus: helperStatus, configuration: currentConfiguration)
             do {
                 try diagnosticsText.write(to: destination, atomically: true, encoding: .utf8)
@@ -418,42 +433,6 @@ final class AppModel: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return formatter.string(from: Date())
-    }
-
-    private static func runCoreFeatureRepairScript() async throws {
-        let shellScript = """
-        /bin/launchctl bootout system /Library/LaunchDaemons/com.iven.macgametoolbox.helper.v8.plist 2>/dev/null || true
-        /bin/launchctl enable system/com.iven.macgametoolbox.helper.v8
-        /bin/launchctl bootstrap system /Library/LaunchDaemons/com.iven.macgametoolbox.helper.v8.plist
-        """
-        let appleScript = """
-        on run argv
-            do shell script item 1 of argv with administrator privileges
-        end run
-        """
-
-        let result: (Int32, String, String) = try await Task.detached(priority: .userInitiated) {
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", appleScript, "--", shellScript]
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            try process.run()
-            process.waitUntilExit()
-            let output = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let error = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (process.terminationStatus, output, error)
-        }.value
-
-        guard result.0 == 0 else {
-            if result.2.contains("(-128)") { throw ToolboxError.authorizationCancelled }
-            let message = result.2.isEmpty ? result.1 : result.2
-            throw ToolboxError.commandFailed(message.isEmpty ? tr("核心功能修复失败", "Core feature repair failed") : message)
-        }
     }
 
     private func startAutomaticMountMonitoring() {
@@ -471,7 +450,7 @@ final class AppModel: ObservableObject {
         var nextLogSecond = 0
         while !Task.isCancelled, configuration.automaticallyRestoreMountsOnLaunch {
             do {
-                let availableVolumes = try await diskService.listEligibleVolumes()
+                let availableVolumes = try await application.eligibleVolumes()
                 disks = availableVolumes
                 enrichRestorableMountUUIDs(from: availableVolumes)
                 let elapsedSeconds = Int(startedAt.duration(to: clock.now).components.seconds)
@@ -492,13 +471,10 @@ final class AppModel: ObservableObject {
     }
 
     private func restoreMounts(from volumes: [DiskVolume], manual: Bool = false) async {
-        let assignments = configuration.restorableDiskMounts.compactMap { preset -> (String, String)? in
-            guard let path = preset.mountPath,
-                  let volume = DiskService.matchingVolume(for: preset, in: volumes),
-                  volume.mountPoint != path,
-                  FileManager.default.fileExists(atPath: path) else { return nil }
-            return (volume.id, path)
-        }
+        let assignments = await application.restorationAssignments(
+            from: configuration.restorableDiskMounts,
+            volumes: volumes
+        )
         guard !assignments.isEmpty else {
             if manual {
                 report(ToolboxError.commandFailed(tr("没有找到可恢复的磁盘和路径", "No matching volume and path found to restore")))
@@ -511,7 +487,13 @@ final class AppModel: ObservableObject {
         }
 
         status = TaskStatus(phase: .running, message: tr("正在自动恢复上次挂载", "Restoring previous mounts"))
-        let results = await diskService.mountBatch(assignments)
+        let results: [String: Result<Void, Error>]
+        do {
+            results = try await application.mount(assignments, creatingDirectories: false)
+        } catch {
+            report(error)
+            return
+        }
         let succeeded = assignments.filter {
             guard case .success? = results[$0.0] else { return false }
             return true
@@ -551,9 +533,103 @@ final class AppModel: ObservableObject {
         if changed { saveConfiguration() }
     }
 
+    private func recoverIncompleteGameWorkflows() async {
+        do {
+            let results = try await genshinWorkflow.recoverIncompleteRuns { [weak self] update in
+                await self?.applyGenshinWorkflowUpdate(update)
+            }
+            guard let failed = results.first(where: { $0.status == .recoveryFailed }) else {
+                if !results.isEmpty {
+                    status = TaskStatus(
+                        phase: .succeeded,
+                        message: tr("上次中断的网络状态已恢复", "Recovered network state from the interrupted launch"),
+                        progress: 1
+                    )
+                }
+                return
+            }
+            report(ToolboxError.commandFailed(
+                failed.errorDescription ?? tr("上次启动的网络恢复失败", "Failed to recover network state from the previous launch")
+            ))
+        } catch {
+            report(error)
+        }
+    }
+
+    private func applyGenshinWorkflowUpdate(_ update: GenshinWorkflowUpdate) {
+        let message: String
+        switch update.stage {
+        case .recovering:
+            message = tr("正在恢复上次中断的网络状态", "Recovering network state from the previous launch")
+        case .preflight:
+            message = tr("正在检查 CrossOver 与原神配置", "Checking CrossOver and the Genshin configuration")
+        case .isolatingNetwork:
+            message = tr("正在短时隔离全机网络", "Temporarily isolating network access")
+        case .configuringMetalHUD:
+            message = tr("正在配置 MetalHUD", "Configuring MetalHUD")
+        case .launching:
+            message = tr("正在自动启动原神", "Launching Genshin automatically")
+        case .waitingForRendering:
+            message = tr("等待原神进入渲染阶段", "Waiting for Genshin to enter the rendering stage")
+        case .restoringNetwork:
+            message = tr("已通过启动阶段，正在恢复网络", "Startup stage passed; restoring network")
+        case .applyingQoS:
+            message = tr("正在优化原神进程优先级", "Optimizing Genshin process priority")
+        }
+        status.phase = update.stage == .isolatingNetwork ? .awaitingAuthorization : .running
+        status.message = message
+        status.progress = update.progress
+        if status.log.last != message {
+            status.log.append(message)
+        }
+    }
+
+    private func applyGenshinWorkflowResult(_ result: WorkflowRunResult) {
+        switch result.status {
+        case .succeeded:
+            status = TaskStatus(
+                phase: .succeeded,
+                message: tr("原神已启动，网络已恢复并完成进程优化", "Genshin launched; network restored and process optimized"),
+                progress: 1,
+                log: status.log
+            )
+        case .cancelled:
+            status = TaskStatus(
+                phase: .cancelled,
+                message: tr("已取消，网络恢复完成", "Cancelled after network restoration"),
+                log: status.log
+            )
+        case .recoveryFailed:
+            status = TaskStatus(
+                phase: .failed,
+                message: result.errorDescription ?? tr("网络恢复失败", "Network recovery failed"),
+                log: status.log
+            )
+        case .failed:
+            status = TaskStatus(
+                phase: .failed,
+                message: result.errorDescription ?? tr("原神启动流程失败", "The Genshin launch workflow failed"),
+                log: status.log
+            )
+        default:
+            status = TaskStatus(
+                phase: .failed,
+                message: tr("原神启动流程以异常状态结束", "The Genshin launch workflow ended in an unexpected state"),
+                log: status.log
+            )
+        }
+        DiagnosticFileLogger.write("Genshin workflow finished with status: \(result.status.rawValue)")
+    }
+
     private func saveConfiguration() {
         let value = configuration
-        Task { try? await configurationStore.save(value) }
+        Task {
+            do {
+                try await application.saveConfiguration(value)
+            } catch {
+                report(error)
+            }
+        }
     }
 
     private func rememberMetalHUDApp(_ applicationURL: URL) {

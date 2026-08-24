@@ -4,7 +4,11 @@ import SwiftUI
 @main
 struct MacGameToolboxApp: App {
     @NSApplicationDelegateAdaptor(MacGameToolboxApplicationDelegate.self) private var applicationDelegate
-    @StateObject private var model = AppModel()
+    @StateObject private var model: AppModel
+
+    init() {
+        _model = StateObject(wrappedValue: AppModel(dependencies: AppCompositionRoot.make()))
+    }
 
     var body: some Scene {
         Window(tr("Mac游戏工具箱", "Mac Game Toolbox"), id: "main") {

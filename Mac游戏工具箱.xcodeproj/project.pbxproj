@@ -37,6 +37,20 @@
 		A1000000000000000000001C /* WallpaperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000009 /* WallpaperService.swift */; };
 		A1000000000000000000001D /* NetworkProxyBypass.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000A /* NetworkProxyBypass.swift */; };
 		A1000000000000000000001E /* ProcessPriorityBoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000B /* ProcessPriorityBoost.swift */; };
+		A1000000000000000000001F /* CapabilityContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000C /* CapabilityContract.swift */; };
+		A10000000000000000000020 /* CapabilityRegistries.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000D /* CapabilityRegistries.swift */; };
+		A10000000000000000000021 /* BuiltInCapabilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000E /* BuiltInCapabilities.swift */; };
+		A10000000000000000000022 /* GameInstallation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000F /* GameInstallation.swift */; };
+		A10000000000000000000023 /* WorkflowTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000010 /* WorkflowTypes.swift */; };
+		A10000000000000000000024 /* WorkflowJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000011 /* WorkflowJournal.swift */; };
+		A10000000000000000000025 /* WorkflowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000012 /* WorkflowEngine.swift */; };
+		A10000000000000000000026 /* CrossOverLaunchAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000013 /* CrossOverLaunchAdapter.swift */; };
+		A10000000000000000000027 /* CrossOverTraceParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000014 /* CrossOverTraceParser.swift */; };
+		A10000000000000000000028 /* GenshinReadinessProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000015 /* GenshinReadinessProbe.swift */; };
+		A10000000000000000000029 /* AppCompositionRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000B /* AppCompositionRoot.swift */; };
+		A1000000000000000000002A /* GenshinConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000C /* GenshinConfigurationView.swift */; };
+		A1000000000000000000002B /* GenshinWorkflowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000D /* GenshinWorkflowCoordinator.swift */; };
+		A1000000000000000000002C /* ToolboxApplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000E /* ToolboxApplicationService.swift */; };
 		B10000000000000000000001 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* Models.swift */; };
 		B10000000000000000000002 /* CommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* CommandRunner.swift */; };
 		B10000000000000000000003 /* ConfigurationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* ConfigurationStore.swift */; };
@@ -50,6 +64,25 @@
 		B1000000000000000000000B /* WallpaperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000009 /* WallpaperService.swift */; };
 		B1000000000000000000000C /* NetworkProxyBypass.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000A /* NetworkProxyBypass.swift */; };
 		B1000000000000000000000D /* ProcessPriorityBoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000B /* ProcessPriorityBoost.swift */; };
+		B1000000000000000000000E /* CapabilityContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000C /* CapabilityContract.swift */; };
+		B1000000000000000000000F /* CapabilityRegistries.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000D /* CapabilityRegistries.swift */; };
+		B10000000000000000000010 /* BuiltInCapabilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000E /* BuiltInCapabilities.swift */; };
+		B10000000000000000000011 /* GameInstallation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000F /* GameInstallation.swift */; };
+		B10000000000000000000012 /* WorkflowTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000010 /* WorkflowTypes.swift */; };
+		B10000000000000000000013 /* WorkflowJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000011 /* WorkflowJournal.swift */; };
+		B10000000000000000000014 /* WorkflowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000012 /* WorkflowEngine.swift */; };
+		B10000000000000000000015 /* CrossOverLaunchAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000013 /* CrossOverLaunchAdapter.swift */; };
+		B10000000000000000000016 /* CrossOverTraceParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000014 /* CrossOverTraceParser.swift */; };
+		B10000000000000000000017 /* GenshinReadinessProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000015 /* GenshinReadinessProbe.swift */; };
+		B10000000000000000000018 /* CommandExecution.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000009 /* CommandExecution.swift */; };
+		B10000000000000000000019 /* Registry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000000000000000000000A /* Registry.swift */; };
+		B1000000000000000000001A /* HealthCheckCapabilityHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000000000000000000000B /* HealthCheckCapabilityHandler.swift */; };
+		B1000000000000000000001B /* HostsCapabilityHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000000000000000000000C /* HostsCapabilityHandler.swift */; };
+		B1000000000000000000001C /* ProcessQoSCapabilityHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000000000000000000000D /* ProcessQoSCapabilityHandler.swift */; };
+		B1000000000000000000001D /* CacheCapabilityHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000000000000000000000E /* CacheCapabilityHandler.swift */; };
+		B1000000000000000000001E /* HostnamesCapabilityHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000000000000000000000F /* HostnamesCapabilityHandler.swift */; };
+		B1000000000000000000001F /* DirectoryCapabilityHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000010 /* DirectoryCapabilityHandler.swift */; };
+		B10000000000000000000020 /* PFNetworkIsolationHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000011 /* PFNetworkIsolationHandler.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -104,6 +137,16 @@
 		F10000000000000000000009 /* WallpaperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpaperService.swift; sourceTree = "<group>"; };
 		F1000000000000000000000A /* NetworkProxyBypass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkProxyBypass.swift; sourceTree = "<group>"; };
 		F1000000000000000000000B /* ProcessPriorityBoost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessPriorityBoost.swift; sourceTree = "<group>"; };
+		F1000000000000000000000C /* CapabilityContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapabilityContract.swift; sourceTree = "<group>"; };
+		F1000000000000000000000D /* CapabilityRegistries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapabilityRegistries.swift; sourceTree = "<group>"; };
+		F1000000000000000000000E /* BuiltInCapabilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInCapabilities.swift; sourceTree = "<group>"; };
+		F1000000000000000000000F /* GameInstallation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameInstallation.swift; sourceTree = "<group>"; };
+		F10000000000000000000010 /* WorkflowTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowTypes.swift; sourceTree = "<group>"; };
+		F10000000000000000000011 /* WorkflowJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowJournal.swift; sourceTree = "<group>"; };
+		F10000000000000000000012 /* WorkflowEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowEngine.swift; sourceTree = "<group>"; };
+		F10000000000000000000013 /* CrossOverLaunchAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossOverLaunchAdapter.swift; sourceTree = "<group>"; };
+		F10000000000000000000014 /* CrossOverTraceParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossOverTraceParser.swift; sourceTree = "<group>"; };
+		F10000000000000000000015 /* GenshinReadinessProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenshinReadinessProbe.swift; sourceTree = "<group>"; };
 		F20000000000000000000001 /* MacGameToolboxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacGameToolboxApp.swift; sourceTree = "<group>"; };
 		F20000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		F20000000000000000000003 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -114,6 +157,10 @@
 		F20000000000000000000008 /* DiagnosticFileLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticFileLogger.swift; sourceTree = "<group>"; };
 		F20000000000000000000009 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
 		F2000000000000000000000A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F2000000000000000000000B /* AppCompositionRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCompositionRoot.swift; sourceTree = "<group>"; };
+		F2000000000000000000000C /* GenshinConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenshinConfigurationView.swift; sourceTree = "<group>"; };
+		F2000000000000000000000D /* GenshinWorkflowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenshinWorkflowCoordinator.swift; sourceTree = "<group>"; };
+		F2000000000000000000000E /* ToolboxApplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxApplicationService.swift; sourceTree = "<group>"; };
 		F30000000000000000000001 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		F30000000000000000000002 /* com.iven.macgametoolbox.helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.iven.macgametoolbox.helper.plist; sourceTree = "<group>"; };
 		F30000000000000000000003 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
@@ -122,6 +169,15 @@
 		F30000000000000000000006 /* com.iven.macgametoolbox.helper.v5.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.iven.macgametoolbox.helper.v5.plist; sourceTree = "<group>"; };
 		F30000000000000000000007 /* com.iven.macgametoolbox.helper.v6.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.iven.macgametoolbox.helper.v6.plist; sourceTree = "<group>"; };
 		F30000000000000000000008 /* com.iven.macgametoolbox.helper.v7.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.iven.macgametoolbox.helper.v7.plist; sourceTree = "<group>"; };
+		F30000000000000000000009 /* CommandExecution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandExecution.swift; sourceTree = "<group>"; };
+		F3000000000000000000000A /* Registry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Registry.swift; sourceTree = "<group>"; };
+		F3000000000000000000000B /* HealthCheckCapabilityHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthCheckCapabilityHandler.swift; sourceTree = "<group>"; };
+		F3000000000000000000000C /* HostsCapabilityHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsCapabilityHandler.swift; sourceTree = "<group>"; };
+		F3000000000000000000000D /* ProcessQoSCapabilityHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessQoSCapabilityHandler.swift; sourceTree = "<group>"; };
+		F3000000000000000000000E /* CacheCapabilityHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheCapabilityHandler.swift; sourceTree = "<group>"; };
+		F3000000000000000000000F /* HostnamesCapabilityHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostnamesCapabilityHandler.swift; sourceTree = "<group>"; };
+		F30000000000000000000010 /* DirectoryCapabilityHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryCapabilityHandler.swift; sourceTree = "<group>"; };
+		F30000000000000000000011 /* PFNetworkIsolationHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PFNetworkIsolationHandler.swift; sourceTree = "<group>"; };
 		F40000000000000000000001 /* Mac 游戏工具箱.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mac 游戏工具箱.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F40000000000000000000002 /* MacGameToolboxPrivilegedHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = MacGameToolboxPrivilegedHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		F50000000000000000000001 /* ServiceManagement.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ServiceManagement.framework; path = System/Library/Frameworks/ServiceManagement.framework; sourceTree = SDKROOT; };
@@ -184,6 +240,16 @@
 				F10000000000000000000009 /* WallpaperService.swift */,
 				F1000000000000000000000A /* NetworkProxyBypass.swift */,
 				F1000000000000000000000B /* ProcessPriorityBoost.swift */,
+				F1000000000000000000000C /* CapabilityContract.swift */,
+				F1000000000000000000000D /* CapabilityRegistries.swift */,
+				F1000000000000000000000E /* BuiltInCapabilities.swift */,
+				F1000000000000000000000F /* GameInstallation.swift */,
+				F10000000000000000000010 /* WorkflowTypes.swift */,
+				F10000000000000000000011 /* WorkflowJournal.swift */,
+				F10000000000000000000012 /* WorkflowEngine.swift */,
+				F10000000000000000000013 /* CrossOverLaunchAdapter.swift */,
+				F10000000000000000000014 /* CrossOverTraceParser.swift */,
+				F10000000000000000000015 /* GenshinReadinessProbe.swift */,
 			);
 			name = MacGameToolboxCore;
 			path = Sources/MacGameToolboxCore;
@@ -202,6 +268,10 @@
 				F20000000000000000000008 /* DiagnosticFileLogger.swift */,
 				F20000000000000000000009 /* Localization.swift */,
 				F2000000000000000000000A /* Assets.xcassets */,
+				F2000000000000000000000B /* AppCompositionRoot.swift */,
+				F2000000000000000000000C /* GenshinConfigurationView.swift */,
+				F2000000000000000000000D /* GenshinWorkflowCoordinator.swift */,
+				F2000000000000000000000E /* ToolboxApplicationService.swift */,
 			);
 			name = MacGameToolbox;
 			path = Sources/MacGameToolbox;
@@ -211,9 +281,26 @@
 			isa = PBXGroup;
 			children = (
 				F30000000000000000000001 /* main.swift */,
+				G10000000000000000000007 /* Capabilities */,
 			);
 			name = MacGameToolboxPrivilegedHelper;
 			path = Sources/MacGameToolboxPrivilegedHelper;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000007 /* Capabilities */ = {
+			isa = PBXGroup;
+			children = (
+				F30000000000000000000009 /* CommandExecution.swift */,
+				F3000000000000000000000A /* Registry.swift */,
+				F3000000000000000000000B /* HealthCheckCapabilityHandler.swift */,
+				F3000000000000000000000C /* HostsCapabilityHandler.swift */,
+				F3000000000000000000000D /* ProcessQoSCapabilityHandler.swift */,
+				F3000000000000000000000E /* CacheCapabilityHandler.swift */,
+				F3000000000000000000000F /* HostnamesCapabilityHandler.swift */,
+				F30000000000000000000010 /* DirectoryCapabilityHandler.swift */,
+				F30000000000000000000011 /* PFNetworkIsolationHandler.swift */,
+			);
+			path = Capabilities;
 			sourceTree = "<group>";
 		};
 		G10000000000000000000005 /* Config */ = {
@@ -343,6 +430,16 @@
 				A1000000000000000000001C /* WallpaperService.swift in Sources */,
 				A1000000000000000000001D /* NetworkProxyBypass.swift in Sources */,
 				A1000000000000000000001E /* ProcessPriorityBoost.swift in Sources */,
+				A1000000000000000000001F /* CapabilityContract.swift in Sources */,
+				A10000000000000000000020 /* CapabilityRegistries.swift in Sources */,
+				A10000000000000000000021 /* BuiltInCapabilities.swift in Sources */,
+				A10000000000000000000022 /* GameInstallation.swift in Sources */,
+				A10000000000000000000023 /* WorkflowTypes.swift in Sources */,
+				A10000000000000000000024 /* WorkflowJournal.swift in Sources */,
+				A10000000000000000000025 /* WorkflowEngine.swift in Sources */,
+				A10000000000000000000026 /* CrossOverLaunchAdapter.swift in Sources */,
+				A10000000000000000000027 /* CrossOverTraceParser.swift in Sources */,
+				A10000000000000000000028 /* GenshinReadinessProbe.swift in Sources */,
 				A10000000000000000000009 /* MacGameToolboxApp.swift in Sources */,
 				A1000000000000000000000A /* AppModel.swift in Sources */,
 				A1000000000000000000000B /* DashboardView.swift in Sources */,
@@ -352,6 +449,10 @@
 				A10000000000000000000012 /* DiagnosticsService.swift in Sources */,
 				A10000000000000000000014 /* DiagnosticFileLogger.swift in Sources */,
 				A10000000000000000000016 /* Localization.swift in Sources */,
+				A10000000000000000000029 /* AppCompositionRoot.swift in Sources */,
+				A1000000000000000000002A /* GenshinConfigurationView.swift in Sources */,
+				A1000000000000000000002B /* GenshinWorkflowCoordinator.swift in Sources */,
+				A1000000000000000000002C /* ToolboxApplicationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -370,6 +471,25 @@
 				B1000000000000000000000B /* WallpaperService.swift in Sources */,
 				B1000000000000000000000C /* NetworkProxyBypass.swift in Sources */,
 				B1000000000000000000000D /* ProcessPriorityBoost.swift in Sources */,
+				B1000000000000000000000E /* CapabilityContract.swift in Sources */,
+				B1000000000000000000000F /* CapabilityRegistries.swift in Sources */,
+				B10000000000000000000010 /* BuiltInCapabilities.swift in Sources */,
+				B10000000000000000000011 /* GameInstallation.swift in Sources */,
+				B10000000000000000000012 /* WorkflowTypes.swift in Sources */,
+				B10000000000000000000013 /* WorkflowJournal.swift in Sources */,
+				B10000000000000000000014 /* WorkflowEngine.swift in Sources */,
+				B10000000000000000000015 /* CrossOverLaunchAdapter.swift in Sources */,
+				B10000000000000000000016 /* CrossOverTraceParser.swift in Sources */,
+				B10000000000000000000017 /* GenshinReadinessProbe.swift in Sources */,
+				B10000000000000000000018 /* CommandExecution.swift in Sources */,
+				B10000000000000000000019 /* Registry.swift in Sources */,
+				B1000000000000000000001A /* HealthCheckCapabilityHandler.swift in Sources */,
+				B1000000000000000000001B /* HostsCapabilityHandler.swift in Sources */,
+				B1000000000000000000001C /* ProcessQoSCapabilityHandler.swift in Sources */,
+				B1000000000000000000001D /* CacheCapabilityHandler.swift in Sources */,
+				B1000000000000000000001E /* HostnamesCapabilityHandler.swift in Sources */,
+				B1000000000000000000001F /* DirectoryCapabilityHandler.swift in Sources */,
+				B10000000000000000000020 /* PFNetworkIsolationHandler.swift in Sources */,
 				B10000000000000000000009 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

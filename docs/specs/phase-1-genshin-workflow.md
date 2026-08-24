@@ -4,7 +4,7 @@ Status: draft
 Owner: TingungX  
 Last updated: 2026-08-24  
 Scope: 原神、CrossOver、短时网络隔离、自动恢复、工作流基础设施  
-Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/GamingServices.swift`, `Sources/MacGameToolboxCore/HostsFileEditor.swift`, `Sources/MacGameToolboxCore/NetworkProxyBypass.swift`, `Sources/MacGameToolboxPrivilegedHelper/main.swift`  
+Related code: `Sources/MacGameToolbox/AppCompositionRoot.swift`, `Sources/MacGameToolbox/ToolboxApplicationService.swift`, `Sources/MacGameToolbox/GenshinWorkflowCoordinator.swift`, `Sources/MacGameToolboxCore/WorkflowEngine.swift`, `Sources/MacGameToolboxCore/GenshinReadinessProbe.swift`, `Sources/MacGameToolboxPrivilegedHelper/Capabilities/`
 Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../decisions/0003-ephemeral-pf-network-isolation.md`, `../evidence/2026-08-24-genshin-crossover-launch.md`
 
 ## 问题
@@ -25,6 +25,17 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 保留一个 root helper 进程，在进程内拆分能力 handler，暂不拆成多个特权服务。
 - 解耦顺序优先于外部配方和新 UI：先切断 `AppModel` 与 helper 大 `switch`，再建立事务恢复，最后开放 Recipe。
 - fork 最终采用独立品牌与 App 身份；`Mac GameFlow` 暂作内部工作名，品牌迁移不阻塞本 spec。
+
+## 当前实现状态
+
+截至 2026-08-24，第一阶段的可执行基础已经落地，但本 spec 仍保持 `draft`，因为真实断网启动与候选 probe 的连续复测尚未完成：
+
+- App Composition Root 已一次性组装应用用例边界、内建原神 workflow、不可变 `WorkflowStepRegistry` 和持久化 journal；`AppModel` 不再直接持有或编排具体系统服务。
+- helper 保持单一 root 进程；原有 health、hosts、QoS、缓存、主机名和目录请求已拆成独立 handler，并由只读兼容注册表分发，原有 XPC 行为不变。
+- `network.globalIsolation@1` 已通过正式 capability envelope 和 `PrivilegedCapabilityRegistry` 接入。PF handler 使用固定子 anchor、独占 enable token、60 秒上限租约、续租、root 快照、规则/恢复验证和异常快照紧急清理。
+- 原神内建流程已连接预检、PF 隔离、可选 MetalHUD、`cxstart` 自动启动、`UnityGfxDeviceWorker` readiness、网络恢复和 QoS，并提供取消与 App journal 崩溃恢复。
+- 本机安装绑定只保存 CrossOver App、bottle 和 Windows 启动路径；配置界面可发现常见 CrossOver 安装、bottle 和 `YuanShen.exe`，不把本机路径写入工作流定义。
+- 外部 Recipe loader/compiler、完整游戏优先首页和正式品牌迁移尚未实现；现阶段只运行受信任的内建强类型流程。
 
 ## 目标
 
@@ -166,10 +177,10 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 
 退出条件：helper 核心分发不再按具体能力扩张 `switch`；现有 UI 和请求行为不变。
 
-### 3. 抽出 WorkflowEngine 并迁移 HoYo 流程
+### 3. 抽出 WorkflowEngine 并替换 HoYo 倒计时流程
 
 - 实现只依赖 `WorkflowStepExecuting` 的单运行引擎。
-- 先用内建、强类型 workflow plan 迁移现有 HoYo 倒计时、hosts 和 QoS 流程，不同时开放外部 Recipe。
+- 先用内建、强类型原神 workflow plan 替换现有 HoYo 倒计时与手动启动流程，不同时开放外部 Recipe。
 - 将具体能力编排从 `AppModel` 移出；`AppModel` 只调用 `WorkflowCoordinating` 并映射呈现状态。
 - 通过 `WorkflowStepRegistry` 接入启动、进程等待、MetalHUD 和特权 capability adapter。
 

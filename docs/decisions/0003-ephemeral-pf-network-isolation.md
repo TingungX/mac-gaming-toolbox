@@ -8,7 +8,7 @@ Last updated: 2026-08-24
 
 Scope: 第一阶段全局网络隔离、租约、崩溃恢复与 PF 共存
 
-Related code: `Sources/MacGameToolboxPrivilegedHelper/`, `Sources/MacGameToolboxCore/PrivilegedXPC.swift`
+Related code: `Sources/MacGameToolboxPrivilegedHelper/Capabilities/PFNetworkIsolationHandler.swift`, `Sources/MacGameToolboxCore/BuiltInCapabilities.swift`, `Sources/MacGameToolboxCore/PrivilegedXPC.swift`
 
 Related docs: `../design/workflow-runtime.md`, `../specs/phase-1-genshin-workflow.md`, `0002-single-helper-dual-capability-registries.md`
 
@@ -43,8 +43,8 @@ handler 按 write-ahead 顺序执行：
 
 1. 验证可信 XPC client、contract version、单 active run、5–60 秒租约上限和全局网络资源锁。
 2. 生成不透明 recovery token，并将 run、token、anchor、租约截止时间和 `prepared` 状态原子写入权限为 `0600` 的 root journal。
-3. 只向项目 anchor 加载固定规则；规则文本不来自 App 或 Recipe。
-4. 使用 `pfctl -E` 获取本次能力自己的 PF enable reference token，并更新 root journal。
+3. 使用 `pfctl -E` 获取本次能力自己的 PF enable reference token，并更新 root journal。
+4. 只向项目 anchor 加载固定规则；规则文本不来自 App 或 Recipe。
 5. 在阻断规则已生效后清理现有 PF states，确保隔离前已经建立的连接不能继续绕过新规则。
 6. 验证 PF 已启用且项目 anchor 中只有预期规则，再将 token 标记为 `active` 并返回 opaque recovery handle。
 
@@ -57,6 +57,7 @@ handler 按 write-ahead 顺序执行：
 - 恢复操作幂等；anchor 已空、token 已释放或 App 重试都不能影响其他 PF 使用者。
 - helper 为 active token 维护租约计时器。租约到期自动恢复；App 只能在 contract 上限内续租。
 - helper 重启时读取 root journal：已过期的 token 立即恢复，未过期的 token 重建剩余租约计时器。系统重启会清空临时 PF rules，helper 随后清理过期 journal。
+- root journal 损坏、权限不符或无法解码时，helper 不信任其中 token，但仍紧急清空项目独占 anchor 并验证为空，优先避免永久断网；未知 enable token 不会被猜测或释放。
 - App journal 只保存 opaque handle 和补偿顺序，不保存 PF enable token、规则或 root 快照。
 
 ### 失败语义

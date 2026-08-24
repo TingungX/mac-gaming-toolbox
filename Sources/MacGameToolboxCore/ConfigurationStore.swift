@@ -4,6 +4,7 @@ public actor ConfigurationStore {
     public static let maxDefaultPaths = Int.max
     public static let maxPresets = 5
     public static let maxRecentMetalHUDApps = 12
+    public static let maxGameInstallations = 32
 
     private let configurationURL: URL
     private let fileManager: FileManager
@@ -34,11 +35,12 @@ public actor ConfigurationStore {
 
     public func save(_ configuration: AppConfiguration) throws {
         var normalized = configuration
-        normalized.schemaVersion = 3
+        normalized.schemaVersion = 4
         normalized.defaultPaths = Array(unique(configuration.defaultPaths).prefix(Self.maxDefaultPaths))
         normalized.diskPresets = Array(uniquePresets(configuration.diskPresets).prefix(Self.maxPresets))
         normalized.restorableDiskMounts = uniquePresets(configuration.restorableDiskMounts)
         normalized.recentMetalHUDApps = Array(uniqueRecentApps(configuration.recentMetalHUDApps).prefix(Self.maxRecentMetalHUDApps))
+        normalized.gameInstallations = Array(uniqueGameInstallations(configuration.gameInstallations).prefix(Self.maxGameInstallations))
         if ![10, 15, 20].contains(normalized.hoYoWaitSeconds) { normalized.hoYoWaitSeconds = 15 }
         try fileManager.createDirectory(at: configurationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
@@ -85,5 +87,12 @@ public actor ConfigurationStore {
     private func uniqueRecentApps(_ values: [RecentMetalHUDApp]) -> [RecentMetalHUDApp] {
         var seen = Set<String>()
         return values.filter { seen.insert($0.path).inserted }
+    }
+
+    private func uniqueGameInstallations(_ values: [GameInstallation]) -> [GameInstallation] {
+        var seen = Set<String>()
+        return values.filter { installation in
+            !installation.id.isEmpty && seen.insert(installation.id).inserted
+        }
     }
 }

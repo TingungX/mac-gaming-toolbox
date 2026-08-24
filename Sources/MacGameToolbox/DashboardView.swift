@@ -38,6 +38,9 @@ struct DashboardView: View {
         .sheet(isPresented: $model.showingChangelog) { ChangelogView() }
         .sheet(isPresented: $model.showingTutorials) { TutorialsView() }
         .sheet(isPresented: $model.showingProcessSelection) { ProcessSelectionView().environmentObject(model) }
+        .sheet(isPresented: $model.showingGenshinConfiguration) {
+            GenshinConfigurationView().environmentObject(model)
+        }
         .alert(cacheAlertTitle, isPresented: $model.showingCacheConfirmation) {
             Button(tr("取消", "Cancel"), role: .cancel) {}
             Button(model.cacheConfirmationStage == 1 ? tr("继续", "Continue") : tr("确认删除", "Delete"), role: model.configuration.excludesSensitiveCacheFiles ? nil : .destructive) { model.confirmCacheCleaning() }
@@ -89,8 +92,8 @@ struct DashboardView: View {
                         .frame(minWidth: 160)
                 }
                 Spacer(minLength: 8)
-                if model.isHoYoAssistantRunning {
-                    Button(tr("取消并恢复 hosts", "Cancel and restore hosts")) { model.cancelHoYoAssistant() }
+                if model.isGenshinWorkflowRunning {
+                    Button(tr("取消并恢复网络", "Cancel and restore network")) { model.cancelGenshinWorkflow() }
                 }
                 Text(AppLanguage.phase(model.status.phase))
                     .font(.caption)
@@ -121,17 +124,15 @@ struct DashboardView: View {
                 }
             }
         }
-        FeatureCard(icon: "gamecontroller.fill", title: tr("HoYoGames 启动帮助", "HoYoGames Launch Assistant"), subtitle: tr("此选项可以帮助你启动HoYoGames，点击“开始运行”后需要在指定时间内打开游戏", "Helps launch HoYoGames; open the game within the selected time after clicking Start")) {
+        FeatureCard(icon: "gamecontroller.fill", title: tr("原神一键启动", "Genshin One-click Launch"), subtitle: tr("短时隔离网络，自动启动原神；检测到渲染线程后立即恢复网络并优化进程", "Briefly isolates the network, launches Genshin, restores connectivity at rendering start, and optimizes the process")) {
             HStack(alignment: .bottom) {
-                Button(tr("开始运行", "Start")) { model.startHoYoAssistant() }
+                Button(tr("启动原神", "Launch Genshin")) { model.startGenshinWorkflow() }
                     .liquidGlassButton(prominent: true)
+                    .disabled(model.isGenshinWorkflowRunning)
                 Spacer()
-                Picker(tr("等待时间", "Wait time"), selection: Binding(get: { model.configuration.hoYoWaitSeconds }, set: { model.setHoYoWaitSeconds($0) })) {
-                    ForEach([10, 15, 20], id: \.self) { Text("\($0) \(tr("秒", "sec"))").tag($0) }
+                Button(model.genshinInstallation == nil ? tr("首次配置", "Set up") : tr("配置", "Configure")) {
+                    model.showingGenshinConfiguration = true
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .frame(width: 92)
             }
         }
         FeatureCard(icon: "bolt.fill", title: tr("提高CrossOver优先级", "Increase CrossOver Priority"), subtitle: tr("检测并提高Windows游戏优先级", "Detect and increase Windows game priority")) {

@@ -94,7 +94,7 @@ public struct RecentMetalHUDApp: Codable, Hashable, Identifiable, Sendable {
 }
 
 public struct AppConfiguration: Codable, Equatable, Sendable {
-    public var schemaVersion = 3
+    public var schemaVersion = 4
     public var didImportLegacyConfiguration = false
     public var defaultPaths: [String] = []
     public var diskPresets: [DiskPreset] = []
@@ -105,13 +105,14 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var recentMetalHUDApps: [RecentMetalHUDApp] = []
     public var hoYoWaitSeconds = 15
     public var excludesSensitiveCacheFiles = true
+    public var gameInstallations: [GameInstallation] = []
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, didImportLegacyConfiguration, defaultPaths, diskPresets
         case automaticallyRestoreMountsOnLaunch, restorableDiskMounts, hostnameBackup, customWallpaperPath
-        case recentMetalHUDApps, hoYoWaitSeconds, excludesSensitiveCacheFiles
+        case recentMetalHUDApps, hoYoWaitSeconds, excludesSensitiveCacheFiles, gameInstallations
     }
 
     public init(from decoder: Decoder) throws {
@@ -128,6 +129,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         let decodedWait = try container.decodeIfPresent(Int.self, forKey: .hoYoWaitSeconds) ?? 15
         hoYoWaitSeconds = [10, 15, 20].contains(decodedWait) ? decodedWait : 15
         excludesSensitiveCacheFiles = try container.decodeIfPresent(Bool.self, forKey: .excludesSensitiveCacheFiles) ?? true
+        gameInstallations = try container.decodeIfPresent([GameInstallation].self, forKey: .gameInstallations) ?? []
     }
 }
 

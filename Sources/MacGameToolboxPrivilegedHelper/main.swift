@@ -11,7 +11,6 @@ private let installedHelperPath = "/Library/PrivilegedHelperTools/com.iven.macga
 private let installedPlistPath = "/Library/LaunchDaemons/com.iven.macgametoolbox.helper.v8.plist"
 private let requirementPath = "/Library/PrivilegedHelperTools/com.iven.macgametoolbox.helper.v8.requirement"
 private let expectedAppPath = "/Applications/Mac 游戏工具箱.app"
-private let hoyoDomains = GamingService.hoyoDomains
 private let logger = Logger(subsystem: "com.iven.macgametoolbox", category: "PrivilegedHelper")
 
 enum HelperError: LocalizedError {
@@ -28,7 +27,9 @@ enum HelperError: LocalizedError {
     }
 }
 
-final class HelperService: NSObject, PrivilegedHelperXPCProtocol {
+final class HelperService: NSObject, PrivilegedHelperXPCProtocol, @unchecked Sendable {
+    private let compositionRoot = HelperCapabilityCompositionRoot.builtIn()
+
     func perform(request: Data, withReply reply: @escaping (Bool, String?) -> Void) {
         do {
             guard geteuid() == 0 else { throw HelperError.notRoot }
@@ -42,42 +43,61 @@ final class HelperService: NSObject, PrivilegedHelperXPCProtocol {
         }
     }
 
-    private func performValidated(_ request: PrivilegedRequest) throws {
-        switch request {
-        case .healthCheck: break
-        case .addHoYoHosts:
-            try applyManagedProxyBypass()
-            do {
-                try rewriteHosts(addBlock: true)
-            } catch {
-                try restoreManagedProxyBypass()
-                throw error
-            }
-        case .removeHoYoHosts:
-            try rewriteHosts(addBlock: false)
-            try restoreManagedProxyBypass()
-        case .renice(let pids):
-            guard !pids.isEmpty, pids.count <= 64 else { throw HelperError.invalidArguments }
-            var updatedCount = 0
-            for pid in pids {
-                guard pid > 1 else { throw HelperError.invalidArguments }
-                // Process scans are inherently racy; a short-lived Wine child may
-                // disappear before the helper handles the complete PID batch.
-                if try boostProcess(pid) { updatedCount += 1 }
-            }
-            guard updatedCount > 0 else { throw HelperError.invalidProcess }
-        case .clearSystemCaches:
-            for path in ["/Library/Caches", "/Library/Logs", "/private/var/log"] { try removeVisibleContents(path) }
-        case .setHostnames(let names):
-            guard InputValidation.computerName(names.computerName), InputValidation.hostname(names.hostName), InputValidation.hostname(names.localHostName) else { throw HelperError.invalidArguments }
-            try run("/usr/sbin/scutil", ["--set", "ComputerName", names.computerName])
-            try run("/usr/sbin/scutil", ["--set", "HostName", names.hostName])
-            try run("/usr/sbin/scutil", ["--set", "LocalHostName", names.localHostName])
-            try run("/usr/bin/dscacheutil", ["-flushcache"])
-        case .createDirectory(let value):
-            let path = try validatedPath(value)
-            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    func performCapability(request: Data, withReply reply: @escaping (Data?, String?) -> Void) {
+        guard request.count <= PrivilegedCapabilityXPC.maximumEnvelopeBytes else {
+            reply(nil, "Capability request envelope is too large")
+            return
         }
+
+        let replyBox = CapabilityXPCReply(reply)
+        Task {
+            do {
+                guard geteuid() == 0 else { throw HelperError.notRoot }
+                let request = try JSONDecoder().decode(PrivilegedCapabilityXPCRequest.self, from: request)
+                let response: PrivilegedCapabilityXPCResponse
+                switch request {
+                case .invoke(let invocation):
+                    let result = try await compositionRoot.privilegedRegistry.invoke(invocation)
+                    response = .invocation(result)
+                case .recover(let handle):
+                    try await compositionRoot.privilegedRegistry.recover(handle)
+                    response = .recoveryCompleted
+                }
+                let data = try JSONEncoder().encode(response)
+                guard data.count <= PrivilegedCapabilityXPC.maximumEnvelopeBytes else {
+                    throw HelperError.commandFailed("Capability response envelope is too large")
+                }
+                replyBox.finish(data, nil)
+            } catch {
+                logger.error("Capability request failed: \(error.localizedDescription, privacy: .public)")
+                replyBox.finish(nil, error.localizedDescription)
+            }
+        }
+    }
+
+    private func performValidated(_ request: PrivilegedRequest) throws {
+        try compositionRoot.legacyRegistry.dispatch(request)
+    }
+
+}
+
+private final class CapabilityXPCReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reply: ((Data?, String?) -> Void)?
+
+    init(_ reply: @escaping (Data?, String?) -> Void) {
+        self.reply = reply
+    }
+
+    func finish(_ data: Data?, _ error: String?) {
+        lock.lock()
+        guard let reply else {
+            lock.unlock()
+            return
+        }
+        self.reply = nil
+        lock.unlock()
+        reply(data, error)
     }
 }
 
@@ -190,170 +210,6 @@ func selfExecutableURL() -> URL? {
           SecCodeCopyStaticCode(selfCode, [], &staticCode) == errSecSuccess, let staticCode,
           SecCodeCopyPath(staticCode, [], &executableURL) == errSecSuccess else { return nil }
     return executableURL as URL?
-}
-
-func validatedPath(_ value: String) throws -> String {
-    let path = URL(fileURLWithPath: value).standardizedFileURL.path
-    guard value.hasPrefix("/"), path != "/", !path.contains("\0") else { throw HelperError.invalidPath }
-    return path
-}
-
-func run(_ executable: String, _ arguments: [String]) throws {
-    _ = try runCapturing(executable, arguments)
-}
-
-@discardableResult
-func runCapturing(_ executable: String, _ arguments: [String]) throws -> String {
-    let process = Process()
-    let output = Pipe()
-    let error = Pipe()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    process.standardOutput = output
-    process.standardError = error
-    try process.run()
-    process.waitUntilExit()
-    let stdout = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    let stderr = String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard process.terminationStatus == 0 else {
-        throw HelperError.commandFailed(stderr.isEmpty ? "Command failed (\(process.terminationStatus))" : stderr)
-    }
-    return stdout
-}
-
-private let proxyBypassSnapshotURL = URL(fileURLWithPath: "/var/db/com.iven.macgametoolbox.proxy-bypass.json")
-
-func boostProcess(_ pid: Int32) throws -> Bool {
-    guard kill(pid, 0) == 0 else { return false }
-
-    do {
-        _ = try runCapturing(ProcessPriorityBoost.taskpolicyExecutable, ProcessPriorityBoost.taskpolicyArguments(pid: pid))
-    } catch {
-        guard !ProcessPriorityBoost.isMissingProcess(error.localizedDescription) else { return false }
-        guard kill(pid, 0) == 0 else { return false }
-        do {
-            _ = try runCapturing(ProcessPriorityBoost.taskpolicyExecutable, ProcessPriorityBoost.taskpolicyFallbackArguments(pid: pid))
-        } catch {
-            guard !ProcessPriorityBoost.isMissingProcess(error.localizedDescription) else { return false }
-            throw error
-        }
-    }
-
-    guard kill(pid, 0) == 0 else { return true }
-    errno = 0
-    if setpriority(PRIO_PROCESS, UInt32(pid), ProcessPriorityBoost.niceValue) != 0, errno != ESRCH {
-        logger.error("setpriority(-20) failed for \(pid): errno \(errno)")
-    }
-    return true
-}
-
-func applyManagedProxyBypass() throws {
-    let currentByService = proxyBypassDomainsByService()
-    let plan = NetworkProxyBypass.planApply(
-        currentByService: currentByService,
-        existingSnapshot: loadProxyBypassSnapshot(),
-        extra: hoyoDomains
-    )
-    try persistProxyBypassSnapshot(plan.snapshot)
-    var applied = 0
-    var lastError: Error?
-    for assignment in plan.assignments {
-        do {
-            try run("/usr/sbin/networksetup", NetworkProxyBypass.setArguments(service: assignment.service, domains: assignment.domains))
-            applied += 1
-        } catch {
-            lastError = error
-            logger.error("Failed to set proxy bypass on \(assignment.service, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        }
-    }
-    if applied == 0, !plan.assignments.isEmpty, let lastError {
-        throw lastError
-    }
-}
-
-func restoreManagedProxyBypass() throws {
-    let snapshot = loadProxyBypassSnapshot()
-    let assignments = NetworkProxyBypass.planRestore(
-        snapshot: snapshot,
-        currentByService: proxyBypassDomainsByService(),
-        managed: hoyoDomains
-    )
-    var lastError: Error?
-    for assignment in assignments {
-        do {
-            try run("/usr/sbin/networksetup", NetworkProxyBypass.setArguments(service: assignment.service, domains: assignment.domains))
-        } catch {
-            lastError = error
-            logger.error("Failed to restore proxy bypass on \(assignment.service, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        }
-    }
-    if let lastError { throw lastError }
-    try removeProxyBypassSnapshot()
-}
-
-func proxyBypassDomainsByService() -> [String: [String]] {
-    let list: String
-    do {
-        list = try runCapturing("/usr/sbin/networksetup", ["-listallnetworkservices"])
-    } catch {
-        logger.error("Unable to list network services: \(error.localizedDescription, privacy: .public)")
-        return [:]
-    }
-    var current: [String: [String]] = [:]
-    for service in NetworkProxyBypass.enabledServices(from: list) {
-        do {
-            let output = try runCapturing("/usr/sbin/networksetup", ["-getproxybypassdomains", service])
-            current[service] = NetworkProxyBypass.parseBypassDomains(output)
-        } catch {
-            logger.error("Skipping proxy bypass for \(service, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        }
-    }
-    return current
-}
-
-func loadProxyBypassSnapshot() -> ProxyBypassSnapshot? {
-    guard FileManager.default.fileExists(atPath: proxyBypassSnapshotURL.path) else { return nil }
-    do {
-        return try JSONDecoder().decode(ProxyBypassSnapshot.self, from: Data(contentsOf: proxyBypassSnapshotURL))
-    } catch {
-        logger.error("Unable to read proxy bypass snapshot: \(error.localizedDescription, privacy: .public)")
-        return nil
-    }
-}
-
-func persistProxyBypassSnapshot(_ snapshot: ProxyBypassSnapshot) throws {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
-    try encoder.encode(snapshot).write(to: proxyBypassSnapshotURL, options: .atomic)
-    try FileManager.default.setAttributes(
-        [.posixPermissions: 0o600, .ownerAccountID: 0, .groupOwnerAccountID: 0],
-        ofItemAtPath: proxyBypassSnapshotURL.path
-    )
-}
-
-func removeProxyBypassSnapshot() throws {
-    guard FileManager.default.fileExists(atPath: proxyBypassSnapshotURL.path) else { return }
-    try FileManager.default.removeItem(at: proxyBypassSnapshotURL)
-}
-
-func rewriteHosts(addBlock: Bool) throws {
-    let url = URL(fileURLWithPath: "/etc/hosts")
-    let original = try String(contentsOf: url, encoding: .utf8)
-    let updated = HostsFileEditor.replacingManagedBlock(in: original, domains: hoyoDomains, enabled: addBlock)
-    let temporary = URL(fileURLWithPath: "/etc/.mac-game-toolbox-hosts-\(getpid())")
-    try updated.write(to: temporary, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o644, .ownerAccountID: 0, .groupOwnerAccountID: 0], ofItemAtPath: temporary.path)
-    _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
-    try run("/usr/bin/dscacheutil", ["-flushcache"])
-}
-
-func removeVisibleContents(_ path: String) throws {
-    guard let entries = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
-    for entry in entries where !entry.hasPrefix(".") {
-        try FileManager.default.removeItem(atPath: URL(fileURLWithPath: path).appendingPathComponent(entry).path)
-    }
 }
 
 guard geteuid() == 0 else { fatalError(HelperError.notRoot.localizedDescription) }

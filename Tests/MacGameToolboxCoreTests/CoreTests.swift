@@ -61,6 +61,7 @@ import Testing
     #expect(configuration.restorableDiskMounts.isEmpty)
     #expect(configuration.customWallpaperPath == nil)
     #expect(configuration.recentMetalHUDApps.isEmpty)
+    #expect(configuration.gameInstallations.isEmpty)
     #expect(configuration.hoYoWaitSeconds == 15)
     #expect(configuration.excludesSensitiveCacheFiles)
     #expect(configuration.diskPresets.first?.diskIdentifier == "disk4s1")
@@ -76,7 +77,7 @@ import Testing
     let loaded = try await store.load(importLegacy: false)
     #expect(loaded.automaticallyRestoreMountsOnLaunch)
     #expect(loaded.restorableDiskMounts == configuration.restorableDiskMounts)
-    #expect(loaded.schemaVersion == 3)
+    #expect(loaded.schemaVersion == 4)
 }
 
 @Test func configurationPreservesAllRestorableMounts() async throws {
@@ -377,7 +378,7 @@ actor RejectingPrivilegedOperator: PrivilegedOperating {
     #expect(!FileManager.default.fileExists(atPath: removable.path))
 }
 
-@Test func configurationNormalizesNewVersionThreePreferences() async throws {
+@Test func configurationNormalizesCurrentPreferences() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let store = ConfigurationStore(configurationURL: root.appendingPathComponent("configuration.json"))
     var configuration = AppConfiguration()
@@ -389,10 +390,34 @@ actor RejectingPrivilegedOperator: PrivilegedOperating {
     ]
     try await store.save(configuration)
     let loaded = try await store.load(importLegacy: false)
-    #expect(loaded.schemaVersion == 3)
+    #expect(loaded.schemaVersion == 4)
     #expect(loaded.hoYoWaitSeconds == 15)
     #expect(!loaded.excludesSensitiveCacheFiles)
     #expect(loaded.recentMetalHUDApps == [RecentMetalHUDApp(path: "/Applications/A.app", displayName: "A")])
+}
+
+@Test func configurationRoundTripsMachineLocalGameInstallations() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let store = ConfigurationStore(configurationURL: root.appendingPathComponent("configuration.json"))
+    var configuration = AppConfiguration()
+    configuration.gameInstallations = [
+        GameInstallation(
+            id: "game.hoyo.genshin.cn",
+            displayName: "Genshin Impact",
+            launchBinding: .crossOver(CrossOverGameBinding(
+                applicationPath: "/Applications/CrossOver.app",
+                bottleName: "Genshin",
+                executablePath: #"Y:\Games\Genshin Impact Game\YuanShen.exe"#,
+                workingDirectoryPath: #"Y:\Games\Genshin Impact Game"#
+            ))
+        )
+    ]
+
+    try await store.save(configuration)
+    let loaded = try await store.load(importLegacy: false)
+
+    #expect(loaded.gameInstallations == configuration.gameInstallations)
+    #expect(loaded.schemaVersion == 4)
 }
 
 @Test func processRunnerDrainsOutputLargerThanPipeBuffer() async throws {

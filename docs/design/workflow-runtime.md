@@ -4,7 +4,7 @@ Status: draft
 Owner: TingungX  
 Last updated: 2026-08-24  
 Scope: 外部游戏配方、工作流执行、状态恢复、特权能力调用  
-Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/`, `Sources/MacGameToolboxPrivilegedHelper/`  
+Related code: `Sources/MacGameToolbox/AppCompositionRoot.swift`, `Sources/MacGameToolbox/ToolboxApplicationService.swift`, `Sources/MacGameToolbox/GenshinWorkflowCoordinator.swift`, `Sources/MacGameToolboxCore/`, `Sources/MacGameToolboxPrivilegedHelper/Capabilities/`
 Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../decisions/0003-ephemeral-pf-network-isolation.md`, `../specs/phase-1-genshin-workflow.md`
 
 ## 背景与问题
@@ -19,6 +19,12 @@ Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../de
 - root helper 通过一个不断扩张的 `switch` 承担鉴权、分发、参数验证和能力实现，难以独立测试与演进。
 
 目标不是增加一个通用脚本执行器，而是建立一套由外部配方描述、由 App 内受信代码执行的游戏工作流运行时。
+
+## 当前落地边界
+
+当前代码已建立共享 capability contract、两个不可变注册表、通用 `WorkflowEngine`、用户态 journal、正式 capability XPC envelope，以及 root 侧 PF 租约与快照。原神以 Composition Root 中的内建强类型 plan 接入；`AppModel` 只调用 `ToolboxApplicationCoordinating` 和 `GenshinWorkflowCoordinating`，具体系统服务不再进入呈现层。
+
+迁移期保留两条 helper 分发路径：原有 `PrivilegedRequest` 由独立 handler 组成的只读兼容注册表承接，保证现有 UI 行为不变；新工作流的 PF 隔离只走正式 `PrivilegedCapabilityRegistry`。其他旧能力在具备 contract 与副作用恢复语义前，不会向外部 Recipe 开放。Recipe loader/compiler 和外部导入 UI 仍属于后续阶段。
 
 ## 目标
 
@@ -156,7 +162,7 @@ App Composition Root 将游戏启动、进程等待、readiness probe、MetalHUD
 
 helper Composition Root 将网络、hosts、QoS、磁盘和主机名等能力注册为不可变映射。XPC 层只负责可信客户端检查、envelope 限制和 registry dispatch；每个 handler 独立完成强类型解码、领域验证、执行和回滚。
 
-保留一个 root helper 进程。它统一持有资源锁与 root journal，但能力实现拆到独立 handler；暂不创建多个 LaunchDaemon 或 Mach service。
+保留一个 root helper 进程。它统一持有资源锁与 root journal，但能力实现拆到独立 handler；暂不创建多个 LaunchDaemon 或 Mach service。迁移期旧 XPC 请求先通过独立 handler 的兼容注册表分发，正式 capability 注册表不因此接受缺少恢复语义的旧副作用能力。
 
 ### Capability Invocation
 
@@ -210,9 +216,9 @@ App/helper unexpected exit
 - App 消失、心跳停止或租约到期时，helper 自动恢复网络。
 - helper 重启后先读取未完成租约；已过期则恢复，未过期则继续计时。
 - App 下次启动主动查询并恢复任何 stale run。
-- 应用隔离和恢复后都进行独立连通性验证。
+- 应用隔离后验证 PF 已启用且项目 anchor 只有固定规则；恢复后验证该 anchor 已清空。远端连通性不是 PF 状态的可靠前置条件，不以访问某个公网服务代替本机状态验证。
 
-第一阶段按 ADR-0003 使用 helper 管理的临时 PF 子 anchor。handler 只加载和清理项目自己的 anchor，使用 PF enable reference token 与 root journal 实现租约恢复，并在隔离规则生效后清理既有 PF states。Recipe 只看到稳定的 `networkIsolation` capability，不能提供 anchor、规则或 PF 参数。
+第一阶段按 ADR-0003 使用 helper 管理的临时 PF 子 anchor。handler 只加载和清理项目自己的 anchor，使用 PF enable reference token 与 root journal 实现租约恢复，并在隔离规则生效后清理既有 PF states。Recipe 只看到稳定的 `network.globalIsolation` capability，不能提供 anchor、规则或 PF 参数。
 
 ## 配方信任与权限呈现
 
