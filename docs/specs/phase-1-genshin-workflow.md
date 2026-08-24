@@ -5,7 +5,7 @@ Owner: TingungX
 Last updated: 2026-08-24  
 Scope: 原神、CrossOver、短时网络隔离、自动恢复、工作流基础设施  
 Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/GamingServices.swift`, `Sources/MacGameToolboxCore/HostsFileEditor.swift`, `Sources/MacGameToolboxCore/NetworkProxyBypass.swift`, `Sources/MacGameToolboxPrivilegedHelper/main.swift`  
-Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`
+Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../evidence/2026-08-24-genshin-crossover-launch.md`
 
 ## 问题
 
@@ -18,6 +18,7 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 第一款验收游戏为原神。
 - 成功基线为“先断网，再启动游戏”。
 - 网络方案采用“先稳后精”：先把已验证的全局网络闸门自动化并保证恢复，同时采集证据；后续再判断能否定向隔离。
+- 第一版 readiness 采用保守的渲染起点：只在当前 `YuanShen.exe` PID 出现 `UnityGfxDeviceWorker` 线程后恢复网络；用户实测约 3 秒可用只作为后续优化数据，不作为成功条件。
 - 游戏流程由外部可编辑、能力受限的 Recipe 描述。
 - App 侧使用不可变 `WorkflowStepRegistry`，helper 侧使用不可变 `PrivilegedCapabilityRegistry`；两边只共享稳定 `CapabilityContract`。
 - 保留一个 root helper 进程，在进程内拆分能力 handler，暂不拆成多个特权服务。
@@ -94,6 +95,12 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 
 如果证据显示无法建立稳定定向规则，第一阶段保留短时全局网络隔离，不用易碎域名表伪装成精确方案。
 
+### 2026-08-24 配对日志结论
+
+同一个 CrossOver 26.2.0 launcher 会话中包含一次联网失败和一次断网成功的 `YuanShen.exe` 启动。两次都在约 3.1 秒完成 `MHYPBase.dll` 挂载；失败样本在约 6.15 秒进入 `MHYPBase.dll` 内的写访问违例并停止，成功样本则继续创建 `Astrolabe.dll`、`Noelle Main` 和 Unity 渲染线程。
+
+成功样本在启动后约 9.9 秒出现 `UnityGfxDeviceWorker`。该事件晚于已观察到的失败分叉，且语义上对应 Unity render thread，因此确定为 `genshin.renderingStarted.v1` 的首个候选正向信号。完整时间线、证据边界和复测条件见[配对日志分析](../evidence/2026-08-24-genshin-crossover-launch.md)。在复测完成前它仍是候选，不把单个配对样本写成跨版本稳定结论。
+
 ## 网络闸门候选实现
 
 所有候选都必须位于统一 `NetworkIsolationOperating` 抽象之后，Recipe 不感知具体机制。
@@ -131,25 +138,25 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
     { "id": "preflight", "kind": "environment.preflight" },
     { "id": "isolate", "kind": "network.isolate", "leaseSeconds": 45 },
     { "id": "launch", "kind": "game.launch" },
-    { "id": "ready", "kind": "game.awaitReadiness", "probe": "genshin.launchAccepted", "timeoutSeconds": 40 },
+    { "id": "ready", "kind": "game.awaitReadiness", "probe": "genshin.renderingStarted.v1", "timeoutSeconds": 40 },
     { "id": "restore-network", "kind": "network.restore" },
     { "id": "qos", "kind": "process.applyQoS", "target": "gameProcessTree" }
   ]
 }
 ```
 
-`genshin.launchAccepted` 必须是 App 内注册、经过实测的 probe；外部 Recipe 不能提供 probe 脚本。
+`genshin.renderingStarted.v1` 必须是 App 内注册、经过实测的 probe；它只跟踪本次启动的 `YuanShen.exe` PID，并以该 PID 的 `UnityGfxDeviceWorker` 线程事件为当前候选正向信号。外部 Recipe 不能提供日志模式或 probe 脚本。若 probe 超时、目标进程提前退出或出现已知失败签名，工作流必须恢复网络并报告失败，不能因倒计时结束而报告成功。
 
 ## 实施顺序
 
 ### 0. 诊断与行为基线
 
 - 建立可重复的三组启动记录。
-- 找到 readiness 候选信号。
+- 复测 `genshin.renderingStarted.v1` readiness 候选信号。
 - 为当前 `PrivilegedRequest`、helper 分发和 HoYo 流程补齐 characterization tests。
 - 用证据选择全局网络闸门实现并新增 ADR；结构解耦不得预设这一结论。
 
-退出条件：至少一条成功断网运行和对应失败对照具有完整、可比较的时间线。
+退出条件：至少一条成功断网运行和对应失败对照具有完整、可比较的时间线；候选 probe 在连续三次成功与三次失败对照中无误报，并验证在 probe 后恢复网络仍可继续进入游戏。
 
 ### 1. 共享能力契约与双注册表
 
@@ -225,13 +232,14 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 ## 风险
 
 - 反作弊或游戏更新可能改变 readiness 信号；probe 必须版本化并能明确报“不兼容”。
+- `UnityGfxDeviceWorker` 表示渲染线程已经建立，不等同于对所有游戏版本都证明首帧已经显示；若复测出现误报，应以新 probe 版本替代，不能暗中加固定延时掩盖。
 - 全局网络隔离会短时影响其他 App；首次授权与每次运行状态必须清晰可见。
 - 外部 Recipe 容易被误解为脚本系统；UI 和文档必须持续强调 capability 边界。
 - 当前 helper 和 App 身份仍与上游冲突；在发布或安装新构建前必须完成独立身份迁移。
 
 ## 未决问题
 
-- 哪个进程或日志事件稳定表示原神已通过需要断网的启动阶段？
+- `genshin.renderingStarted.v1` 能否在连续复测、游戏更新和计划支持的 CrossOver 图形后端中稳定出现，且恢复网络后不再回到失败路径？
 - 首个验收环境使用哪个 CrossOver 版本、bottle 和原神渠道？
 - 全局网络闸门采用哪个候选实现？
 - 第一版 Recipe 的字段、大小、步骤数量和 timeout 上限是多少？

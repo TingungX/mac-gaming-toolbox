@@ -12,6 +12,10 @@
 - [ADR-0001：外部可编辑、能力受限的工作流配方](decisions/0001-capability-bounded-external-recipes.md)
 - [ADR-0002：单一特权 helper 与双能力注册表](decisions/0002-single-helper-dual-capability-registries.md)
 
+## 诊断证据
+
+- [原神 CrossOver 启动配对日志分析](evidence/2026-08-24-genshin-crossover-launch.md) — 对比联网失败与断网成功路径，记录 `genshin.renderingStarted.v1` 候选信号及复测边界。
+
 ## 文档状态
 
 - `draft`：仍有未决问题，不能单独作为实施依据。
