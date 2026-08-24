@@ -191,7 +191,21 @@ App/helper unexpected exit
   -> recovered | recoveryFailed
 ```
 
-第一阶段只允许一个 active run。全局网络状态和当前单一状态横幅都不支持并发语义；并发请求应明确拒绝，而不是排队后静默执行。
+第一阶段冲突由 **资源锁** 决定，而不是引擎全局互斥。`WorkflowEngine` 允许不同 run ID 并发；独占锁（全局网络隔离、同一 CrossOver 容器）冲突时向用户展示选择，默认保持当前工作流。
+
+App 重启时：若当前步骤是 holding（等待游戏退出），恢复该步骤并继续跟踪；启动期未完成的 run 仍反向补偿。
+
+### 工作流管辖的全局状态
+
+副作用可以落在全机状态上，所有权必须落在某条 run 上：
+
+- 独占锁（`WorkflowExclusiveLockTable`）：`network.globalIsolation`、`process.session.crossover.<bottle>`。同一 key 不能被两条 run 同时持有。启动前若冲突，界面让用户选择保持当前工作流（引导选项）或结束当前再启动新的。
+- 共享 claim（`GameModeClaimLedger`）：Game Mode 是全机一条策略，但由各 run 占用。第一个占用者快照原策略并 `set on`；最后一个释放者才写回快照。功能模块开关在有 holder 时不得管辖该策略。
+- 进程收尾只终止本 run 声称的 bottle 进程，不杀 CrossOver GUI，也不扫全机 Wine。
+
+暂不引入通用“全局资源池”实现层；上述 ledger 是 Game Mode 与独占锁的简单实现。
+
+holding 步骤（如等待游戏退出）使工作流在启动成功后继续作为一等公民，直到游戏退出、残留进程结束并释放 claim。
 
 ## 副作用与补偿
 
@@ -261,10 +275,10 @@ App/helper unexpected exit
 - 两个注册表只能由 Composition Root 构造，启动后注册失败或重复 capability ID 会直接阻止启动。
 - helper 对畸形 payload、错误版本、越权 capability 和伪造 recovery handle 的独立拒绝测试。
 - 现有 helper 请求迁移到 handler 后具有行为等价测试，确保拆分本身不改变系统操作。
-- 引擎成功、失败、取消和反向补偿顺序测试。
-- journal 在每个步骤边界注入崩溃后的恢复测试。
+- 引擎成功、失败、取消、并发 run 和反向补偿顺序测试。
+- journal 在每个步骤边界注入崩溃后的恢复测试；holding 步骤崩溃后恢复为 resume，而非补偿仍在运行的游戏。
 - helper 租约到期、helper 重启和 App 重启恢复测试。
-- 同时启动第二个 workflow 时得到明确冲突错误。
+- 独占资源冲突时由用户选择；默认保持当前工作流。
 - 完整测试与构建无新增 warning。
 
 ## 未决问题

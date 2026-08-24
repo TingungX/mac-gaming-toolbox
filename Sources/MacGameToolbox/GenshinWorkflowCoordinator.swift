@@ -6,12 +6,22 @@ import MacGameToolboxCore
 enum GenshinWorkflowStage: Sendable {
     case recovering
     case preflight
+    case claimingProcessSession
     case isolatingNetwork
     case configuringMetalHUD
     case launching
     case waitingForRendering
     case restoringNetwork
     case applyingQoS
+    case claimingGameMode
+    case waitingForExit
+    case terminatingResiduals
+    case releasingGameMode
+}
+
+struct GenshinWorkflowRecovery: Sendable {
+    let compensated: [WorkflowRunResult]
+    let resumableRunIDs: [WorkflowRunID]
 }
 
 struct GenshinWorkflowUpdate: Sendable {
@@ -27,15 +37,24 @@ struct GenshinWorkflowStepPreview: Identifiable, Hashable, Sendable {
 }
 
 protocol GenshinWorkflowCoordinating: Sendable {
+    func exclusiveConflicts(for installation: GameInstallation) async -> [WorkflowResourceConflict]
+    func gameModeHolderCount() async -> Int
     func run(
         installation: GameInstallation,
         metalHUDEnabled: Bool,
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
     ) async throws -> WorkflowRunResult
+    func resume(
+        runID: WorkflowRunID,
+        installation: GameInstallation,
+        metalHUDEnabled: Bool,
+        update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
+    ) async throws -> WorkflowRunResult
     func cancel() async
+    func cancel(runIDs: [WorkflowRunID]) async
     func recoverIncompleteRuns(
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
-    ) async throws -> [WorkflowRunResult]
+    ) async throws -> GenshinWorkflowRecovery
 }
 
 actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
@@ -43,22 +62,33 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
     static let installationID = "game.hoyo.genshin.cn"
     static let stepPreviews: [GenshinWorkflowStepPreview] = [
         GenshinWorkflowStepPreview(id: "preflight", title: tr("环境预检", "Environment preflight"), detail: tr("检查 CrossOver 与已绑定的游戏配置", "Check CrossOver and the bound game configuration"), icon: "checkmark.shield"),
+        GenshinWorkflowStepPreview(id: "claim-process-session", title: tr("占用容器", "Claim bottle"), detail: tr("以本机安装绑定为锁，独占这个 CrossOver 容器", "Exclusively claim this CrossOver bottle from the local installation binding"), icon: "lock.fill"),
         GenshinWorkflowStepPreview(id: "isolate-network", title: tr("隔离网络", "Isolate network"), detail: tr("短时阻断全机网络，避免启动阶段失败", "Temporarily block global network access during startup"), icon: "network.slash"),
         GenshinWorkflowStepPreview(id: "configure-metalhud", title: tr("配置 MetalHUD", "Configure MetalHUD"), detail: tr("按当前偏好准备性能监视器", "Prepare the performance monitor when enabled"), icon: "gauge.with.dots.needle.67percent"),
         GenshinWorkflowStepPreview(id: "launch-game", title: tr("启动游戏", "Launch game"), detail: tr("通过已验证的 CrossOver 启动适配器启动", "Launch through the verified CrossOver adapter"), icon: "play.fill"),
         GenshinWorkflowStepPreview(id: "await-rendering", title: tr("等待渲染就绪", "Wait for rendering"), detail: tr("检测受限的渲染信号，不使用固定倒计时", "Wait for the bounded rendering signal instead of a fixed delay"), icon: "eye"),
         GenshinWorkflowStepPreview(id: "restore-network", title: tr("恢复网络", "Restore network"), detail: tr("通过同一恢复句柄恢复网络连通性", "Restore connectivity through the same recovery handle"), icon: "network"),
-        GenshinWorkflowStepPreview(id: "apply-qos", title: tr("优化进程", "Optimize processes"), detail: tr("提升已识别的游戏进程优先级", "Boost the identified game process tree"), icon: "bolt.fill")
+        GenshinWorkflowStepPreview(id: "apply-qos", title: tr("优化进程", "Optimize processes"), detail: tr("提升已识别的游戏进程优先级", "Boost the identified game process tree"), icon: "bolt.fill"),
+        GenshinWorkflowStepPreview(id: "claim-game-mode", title: tr("占用 Game Mode", "Claim Game Mode"), detail: tr("由本 run 占用全局 Game Mode；最后释放者才恢复原策略", "This run claims global Game Mode; the last releaser restores the previous policy"), icon: "flag.checkered"),
+        GenshinWorkflowStepPreview(id: "await-exit", title: tr("跟踪至退出", "Track until exit"), detail: tr("等待本容器中的原神进程退出", "Wait until the Genshin process in this bottle exits"), icon: "eye.circle"),
+        GenshinWorkflowStepPreview(id: "terminate-residuals", title: tr("结束残留进程", "Terminate residuals"), detail: tr("只终止本 run 声称的容器进程", "Terminate only processes claimed by this run"), icon: "xmark.circle"),
+        GenshinWorkflowStepPreview(id: "release-game-mode", title: tr("交还 Game Mode", "Release Game Mode"), detail: tr("释放本 run 的 claim；无其他持有者时恢复自动策略", "Release this run's claim and restore auto when no holders remain"), icon: "flag")
     ]
 
     private enum StepKind {
         static let preflight = "environment.preflight"
+        static let claimProcessSession = "process.session.claim"
         static let isolateNetwork = "network.isolate"
         static let configureMetalHUD = "metalhud.configure"
         static let launch = "game.launch.crossover"
         static let awaitReadiness = "game.awaitReadiness.genshin"
         static let restoreNetwork = "network.restore"
         static let applyQoS = "process.applyQoS"
+        static let claimGameMode = "system.gameMode.claim"
+        static let awaitExit = "game.awaitExit"
+        static let terminateResiduals = "process.terminateClaimed"
+        static let releaseGameMode = "system.gameMode.release"
+        static let releaseProcessSession = "process.session.release"
     }
 
     fileprivate struct LeaseInput: Codable, Sendable { let seconds: Int }
@@ -70,13 +100,18 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
     private let engine: WorkflowEngine
     private let runsDirectory: URL
     private let capabilityClient: any PrivilegedCapabilityOperating
+    private let exclusiveLocks: WorkflowExclusiveLockTable
+    private let gameModeClaims: GameModeClaimLedger
 
     init(
         capabilityClient: any PrivilegedCapabilityOperating,
         privileged: any PrivilegedOperating,
         gamingService: GamingService,
         journal: any WorkflowJournal,
-        runsDirectory: URL
+        runsDirectory: URL,
+        exclusiveLocks: WorkflowExclusiveLockTable,
+        gameModeClaims: GameModeClaimLedger,
+        processSignaler: any ProcessSignaling = POSIXProcessSignaler()
     ) throws {
         let runtimeStore = GenshinRuntimeStore()
         let contract = try NetworkIsolationCapability.contract()
@@ -85,6 +120,14 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
                 WorkflowStepRegistration(kind: StepKind.preflight, version: 1) {
                     GenshinPreflightStep(runtimeStore: runtimeStore)
                 },
+                WorkflowStepRegistration(kind: StepKind.claimProcessSession, version: 1) {
+                    GenshinClaimProcessSessionStep(
+                        runtimeStore: runtimeStore,
+                        exclusiveLocks: exclusiveLocks,
+                        gamingService: gamingService,
+                        processSignaler: processSignaler
+                    )
+                },
                 WorkflowStepRegistration(
                     kind: StepKind.isolateNetwork,
                     version: 1,
@@ -92,7 +135,8 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
                 ) {
                     GenshinNetworkIsolationStep(
                         runtimeStore: runtimeStore,
-                        capabilityClient: capabilityClient
+                        capabilityClient: capabilityClient,
+                        exclusiveLocks: exclusiveLocks
                     )
                 },
                 WorkflowStepRegistration(kind: StepKind.configureMetalHUD, version: 1) {
@@ -120,6 +164,34 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
                         gamingService: gamingService,
                         privileged: privileged
                     )
+                },
+                WorkflowStepRegistration(kind: StepKind.claimGameMode, version: 1) {
+                    GenshinClaimGameModeStep(
+                        runtimeStore: runtimeStore,
+                        ledger: gameModeClaims
+                    )
+                },
+                WorkflowStepRegistration(kind: StepKind.awaitExit, version: 1) {
+                    GenshinAwaitExitStep(
+                        runtimeStore: runtimeStore,
+                        gamingService: gamingService
+                    )
+                },
+                WorkflowStepRegistration(kind: StepKind.terminateResiduals, version: 1) {
+                    GenshinTerminateResidualsStep(
+                        runtimeStore: runtimeStore,
+                        gamingService: gamingService,
+                        processSignaler: processSignaler
+                    )
+                },
+                WorkflowStepRegistration(kind: StepKind.releaseGameMode, version: 1) {
+                    GenshinReleaseGameModeStep(ledger: gameModeClaims)
+                },
+                WorkflowStepRegistration(kind: StepKind.releaseProcessSession, version: 1) {
+                    GenshinReleaseProcessSessionStep(
+                        runtimeStore: runtimeStore,
+                        exclusiveLocks: exclusiveLocks
+                    )
                 }
             ],
             contracts: [contract]
@@ -129,6 +201,20 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
         self.engine = WorkflowEngine(registry: registry, journal: journal)
         self.runsDirectory = runsDirectory
         self.capabilityClient = capabilityClient
+        self.exclusiveLocks = exclusiveLocks
+        self.gameModeClaims = gameModeClaims
+    }
+
+    func exclusiveConflicts(for installation: GameInstallation) async -> [WorkflowResourceConflict] {
+        guard case .crossOver(let binding) = installation.launchBinding else { return [] }
+        return await exclusiveLocks.conflicts(for: [
+            .processSession(bottle: binding.bottleName),
+            .networkGlobalIsolation
+        ])
+    }
+
+    func gameModeHolderCount() async -> Int {
+        await gameModeClaims.holderCount()
     }
 
     func run(
@@ -136,20 +222,95 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
         metalHUDEnabled: Bool,
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
     ) async throws -> WorkflowRunResult {
-        let runID = UUID()
+        try await execute(
+            runID: UUID(),
+            installation: installation,
+            metalHUDEnabled: metalHUDEnabled,
+            update: update,
+            resumeExisting: false
+        )
+    }
+
+    func resume(
+        runID: WorkflowRunID,
+        installation: GameInstallation,
+        metalHUDEnabled: Bool,
+        update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
+    ) async throws -> WorkflowRunResult {
+        try await execute(
+            runID: runID,
+            installation: installation,
+            metalHUDEnabled: metalHUDEnabled,
+            update: update,
+            resumeExisting: true
+        )
+    }
+
+    func cancel() async {
+        _ = await engine.cancelActiveRun()
+    }
+
+    func cancel(runIDs: [WorkflowRunID]) async {
+        for runID in runIDs {
+            _ = await engine.cancel(runID: runID)
+        }
+    }
+
+    func recoverIncompleteRuns(
+        update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
+    ) async throws -> GenshinWorkflowRecovery {
+        await update(GenshinWorkflowUpdate(stage: .recovering, progress: 0))
+        let orphanRestored = try await NetworkIsolationRecovery.restoreActive(
+            using: capabilityClient
+        )
+        let runIDs = try await journal.incompleteRunIDs()
+        var compensated: [WorkflowRunResult] = []
+        var resumable: [WorkflowRunID] = []
+        let workflow = try Self.workflow(metalHUDEnabled: false)
+        for runID in runIDs {
+            let events = try await journal.events(for: runID)
+            switch WorkflowRecoveryPlanner.action(for: events, workflow: workflow) {
+            case .resume:
+                resumable.append(runID)
+            case .compensate:
+                await update(GenshinWorkflowUpdate(stage: .recovering, progress: 0))
+                compensated.append(try await engine.recover(workflow, runID: runID))
+            }
+        }
+        if compensated.isEmpty, resumable.isEmpty, orphanRestored {
+            compensated.append(WorkflowRunResult(
+                runID: UUID(),
+                workflowID: Self.workflowID,
+                status: .recovered
+            ))
+        }
+        return GenshinWorkflowRecovery(compensated: compensated, resumableRunIDs: resumable)
+    }
+
+    private func execute(
+        runID: WorkflowRunID,
+        installation: GameInstallation,
+        metalHUDEnabled: Bool,
+        update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void,
+        resumeExisting: Bool
+    ) async throws -> WorkflowRunResult {
         let traceURL = runsDirectory.appendingPathComponent("\(runID.uuidString).cxlog")
         let context = GenshinRunContext(
             installation: installation,
             traceURL: traceURL,
+            sidecarURL: Self.sidecarURL(in: runsDirectory, runID: runID),
             update: update
         )
         await runtimeStore.insert(context, for: runID)
+        if resumeExisting {
+            await restoreSessionClaims(runID: runID, context: context)
+        }
 
         do {
-            let result = try await engine.run(
-                try Self.workflow(metalHUDEnabled: metalHUDEnabled),
-                runID: runID
-            )
+            let workflow = try Self.workflow(metalHUDEnabled: metalHUDEnabled)
+            let result = resumeExisting
+                ? try await engine.recover(workflow, runID: runID)
+                : try await engine.run(workflow, runID: runID)
             await context.cleanup()
             await runtimeStore.remove(runID)
             return result
@@ -160,34 +321,25 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
         }
     }
 
-    func cancel() async {
-        _ = await engine.cancelActiveRun()
+    private func restoreSessionClaims(runID: WorkflowRunID, context: GenshinRunContext) async {
+        let holder = WorkflowExclusiveLockHolder(
+            runID: runID,
+            workflowID: Self.workflowID,
+            title: tr("原神一键启动", "Genshin One-click Launch")
+        )
+        if let bottle = try? await context.bottleName() {
+            try? await exclusiveLocks.acquire(key: .processSession(bottle: bottle), holder: holder)
+        }
+        if let sidecar = await context.loadSidecar() {
+            await context.restoreClaimedPIDs(Set(sidecar.claimedPIDs))
+            if sidecar.gameModeHeld, let baseline = sidecar.gameModeBaseline {
+                await gameModeClaims.restoreHolder(runID: runID, baseline: baseline)
+            }
+        }
     }
 
-    func recoverIncompleteRuns(
-        update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
-    ) async throws -> [WorkflowRunResult] {
-        await update(GenshinWorkflowUpdate(stage: .recovering, progress: 0))
-        let orphanRestored = try await NetworkIsolationRecovery.restoreActive(
-            using: capabilityClient
-        )
-        let runIDs = try await journal.incompleteRunIDs()
-        var results: [WorkflowRunResult] = []
-        for runID in runIDs {
-            await update(GenshinWorkflowUpdate(stage: .recovering, progress: 0))
-            results.append(try await engine.recover(
-                try Self.workflow(metalHUDEnabled: false),
-                runID: runID
-            ))
-        }
-        if results.isEmpty, orphanRestored {
-            results.append(WorkflowRunResult(
-                runID: UUID(),
-                workflowID: Self.workflowID,
-                status: .recovered
-            ))
-        }
-        return results
+    private static func sidecarURL(in directory: URL, runID: WorkflowRunID) -> URL {
+        directory.appendingPathComponent("\(runID.uuidString).session.json")
     }
 
     private static func workflow(metalHUDEnabled: Bool) throws -> CompiledWorkflow {
@@ -197,6 +349,7 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
             revision: 1,
             steps: [
                 WorkflowStepDefinition(id: "preflight", kind: StepKind.preflight),
+                WorkflowStepDefinition(id: "claim-process-session", kind: StepKind.claimProcessSession),
                 WorkflowStepDefinition(
                     id: "isolate-network",
                     kind: StepKind.isolateNetwork,
@@ -214,7 +367,12 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
                     input: try encoder.encode(ReadinessInput(timeoutSeconds: 45))
                 ),
                 WorkflowStepDefinition(id: "restore-network", kind: StepKind.restoreNetwork),
-                WorkflowStepDefinition(id: "apply-qos", kind: StepKind.applyQoS)
+                WorkflowStepDefinition(id: "apply-qos", kind: StepKind.applyQoS),
+                WorkflowStepDefinition(id: "claim-game-mode", kind: StepKind.claimGameMode),
+                WorkflowStepDefinition(id: "await-exit", kind: StepKind.awaitExit, holding: true),
+                WorkflowStepDefinition(id: "terminate-residuals", kind: StepKind.terminateResiduals),
+                WorkflowStepDefinition(id: "release-game-mode", kind: StepKind.releaseGameMode),
+                WorkflowStepDefinition(id: "release-process-session", kind: StepKind.releaseProcessSession)
             ]
         )
     }
@@ -243,9 +401,17 @@ private actor GenshinRuntimeStore {
     }
 }
 
+private struct GenshinSessionSidecar: Codable, Sendable {
+    var bottleName: String
+    var gameModeBaseline: GameModePolicy?
+    var gameModeHeld: Bool
+    var claimedPIDs: [Int32]
+}
+
 private actor GenshinRunContext {
     let installation: GameInstallation
     let traceURL: URL
+    let sidecarURL: URL
 
     private let update: @Sendable (GenshinWorkflowUpdate) async -> Void
     private var launchDescription: CrossOverProcessLaunchDescription?
@@ -254,15 +420,71 @@ private actor GenshinRunContext {
     private var metalHUDEnabled = false
     private var networkHandle: CapabilityRecoveryHandle?
     private var leaseSession: NetworkIsolationLeaseSession?
+    private var claimedPIDs: Set<Int32> = []
+    private var gameModeBaseline: GameModePolicy?
+    private var gameModeHeld = false
 
     init(
         installation: GameInstallation,
         traceURL: URL,
+        sidecarURL: URL,
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
     ) {
         self.installation = installation
         self.traceURL = traceURL
+        self.sidecarURL = sidecarURL
         self.update = update
+    }
+
+    func bottleName() throws -> String {
+        guard case .crossOver(let binding) = installation.launchBinding else {
+            throw GenshinWorkflowCoordinatorError.invalidInstallation
+        }
+        return binding.bottleName
+    }
+
+    func claimedProcessIDs() -> Set<Int32> { claimedPIDs }
+
+    func restoreClaimedPIDs(_ pids: Set<Int32>) {
+        claimedPIDs = pids
+    }
+
+    func claimProcessIDs(_ pids: [Int32]) {
+        claimedPIDs.formUnion(pids.filter { $0 > 1 })
+    }
+
+    func markGameModeClaimed(baseline: GameModePolicy?) {
+        gameModeBaseline = baseline
+        gameModeHeld = true
+    }
+
+    func loadSidecar() -> GenshinSessionSidecar? {
+        guard let data = try? Data(contentsOf: sidecarURL) else { return nil }
+        return try? JSONDecoder().decode(GenshinSessionSidecar.self, from: data)
+    }
+
+    func persistSidecar() {
+        guard let bottle = try? bottleName() else { return }
+        let sidecar = GenshinSessionSidecar(
+            bottleName: bottle,
+            gameModeBaseline: gameModeBaseline,
+            gameModeHeld: gameModeHeld,
+            claimedPIDs: claimedPIDs.sorted()
+        )
+        do {
+            try FileManager.default.createDirectory(
+                at: sidecarURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try JSONEncoder().encode(sidecar).write(to: sidecarURL, options: .atomic)
+        } catch {
+            DiagnosticFileLogger.write("Unable to persist Genshin session sidecar: \(error.localizedDescription)")
+        }
+    }
+
+    func removeSidecar() {
+        try? FileManager.default.removeItem(at: sidecarURL)
     }
 
     func report(_ stage: GenshinWorkflowStage, progress: Double) async {
@@ -371,6 +593,7 @@ private actor GenshinRunContext {
         }
         traceHandle = nil
         launchProcess = nil
+        removeSidecar()
         if FileManager.default.fileExists(atPath: traceURL.path) {
             do {
                 try FileManager.default.removeItem(at: traceURL)
@@ -465,6 +688,7 @@ private struct GenshinPreflightStep: WorkflowStepExecuting {
 private struct GenshinNetworkIsolationStep: WorkflowStepExecuting {
     let runtimeStore: GenshinRuntimeStore
     let capabilityClient: any PrivilegedCapabilityOperating
+    let exclusiveLocks: WorkflowExclusiveLockTable
 
     func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
         let input = try JSONDecoder().decode(
@@ -473,6 +697,14 @@ private struct GenshinNetworkIsolationStep: WorkflowStepExecuting {
         )
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.isolatingNetwork, progress: 0.15)
+        try await exclusiveLocks.acquire(
+            key: .networkGlobalIsolation,
+            holder: WorkflowExclusiveLockHolder(
+                runID: context.runID,
+                workflowID: context.workflowID,
+                title: tr("原神一键启动", "Genshin One-click Launch")
+            )
+        )
         let payload = try JSONEncoder().encode(NetworkIsolationInput.begin(leaseSeconds: input.seconds))
         let invocation = CapabilityInvocationEnvelope(
             runID: context.runID,
@@ -517,6 +749,7 @@ private struct GenshinNetworkIsolationStep: WorkflowStepExecuting {
         if let runtime = await runtimeStore.optionalContext(for: context.runID) {
             await runtime.stopLeaseRenewal()
         }
+        await exclusiveLocks.release(key: .networkGlobalIsolation, runID: context.runID)
         try await capabilityClient.recover(try Self.capabilityHandle(from: recoveryHandle))
     }
 
@@ -524,6 +757,7 @@ private struct GenshinNetworkIsolationStep: WorkflowStepExecuting {
         if let runtime = await runtimeStore.optionalContext(for: context.runID) {
             await runtime.stopLeaseRenewal()
         }
+        await exclusiveLocks.release(key: .networkGlobalIsolation, runID: context.runID)
         _ = try await NetworkIsolationRecovery.restoreActive(
             using: capabilityClient,
             runID: context.runID
@@ -669,7 +903,169 @@ private struct GenshinQoSStep: WorkflowStepExecuting {
         guard !genshinProcesses.isEmpty else {
             throw GenshinWorkflowCoordinatorError.gameProcessNotFound
         }
+        await runtime.claimProcessIDs(genshinProcesses.map(\.pid))
+        await runtime.persistSidecar()
         try await privileged.perform(.renice(genshinProcesses.map(\.pid)))
+        return .completed
+    }
+}
+
+private struct GenshinClaimProcessSessionStep: WorkflowStepExecuting {
+    let runtimeStore: GenshinRuntimeStore
+    let exclusiveLocks: WorkflowExclusiveLockTable
+    let gamingService: GamingService
+    let processSignaler: any ProcessSignaling
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        let runtime = try await runtimeStore.context(for: context.runID)
+        await runtime.report(.claimingProcessSession, progress: 0.08)
+        let bottle = try await runtime.bottleName()
+        try await exclusiveLocks.acquire(
+            key: .processSession(bottle: bottle),
+            holder: WorkflowExclusiveLockHolder(
+                runID: context.runID,
+                workflowID: context.workflowID,
+                title: tr("原神一键启动", "Genshin One-click Launch")
+            )
+        )
+        await runtime.persistSidecar()
+        return WorkflowStepExecution(recoveryHandle: WorkflowRecoveryHandle(
+            capabilityID: "process.session"
+        ))
+    }
+
+    func compensate(
+        _ recoveryHandle: WorkflowRecoveryHandle,
+        context: WorkflowCompensationContext
+    ) async throws {
+        try await teardown(context: context)
+    }
+
+    func compensateInFlight(context: WorkflowCompensationContext) async throws {
+        try await teardown(context: context)
+    }
+
+    private func teardown(context: WorkflowCompensationContext) async throws {
+        guard let runtime = await runtimeStore.optionalContext(for: context.runID) else {
+            return
+        }
+        let bottle = try await runtime.bottleName()
+        let processes = (try? await gamingService.runningProcesses()) ?? []
+        let report = await BottleProcessSession.terminate(
+            claimedPIDs: await runtime.claimedProcessIDs(),
+            processes: processes,
+            bottle: bottle,
+            signaler: processSignaler
+        )
+        await exclusiveLocks.release(key: .processSession(bottle: bottle), runID: context.runID)
+        await exclusiveLocks.release(key: .networkGlobalIsolation, runID: context.runID)
+        await runtime.removeSidecar()
+        if !report.failures.isEmpty {
+            throw GenshinWorkflowCoordinatorError.terminationFailed(report.failures.joined(separator: "; "))
+        }
+    }
+}
+
+private struct GenshinClaimGameModeStep: WorkflowStepExecuting {
+    let runtimeStore: GenshinRuntimeStore
+    let ledger: GameModeClaimLedger
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        let runtime = try await runtimeStore.context(for: context.runID)
+        await runtime.report(.claimingGameMode, progress: 0.92)
+        do {
+            try await ledger.acquire(runID: context.runID)
+            await runtime.markGameModeClaimed(baseline: await ledger.baselinePolicy())
+            await runtime.persistSidecar()
+            return WorkflowStepExecution(recoveryHandle: WorkflowRecoveryHandle(
+                capabilityID: "system.gameMode"
+            ))
+        } catch {
+            DiagnosticFileLogger.write("Game Mode claim skipped: \(error.localizedDescription)")
+            return .completed
+        }
+    }
+
+    func compensate(
+        _ recoveryHandle: WorkflowRecoveryHandle,
+        context: WorkflowCompensationContext
+    ) async throws {
+        try await ledger.release(runID: context.runID)
+    }
+}
+
+private struct GenshinAwaitExitStep: WorkflowStepExecuting {
+    let runtimeStore: GenshinRuntimeStore
+    let gamingService: GamingService
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        let runtime = try await runtimeStore.context(for: context.runID)
+        await runtime.report(.waitingForExit, progress: 0.94)
+        let bottle = try await runtime.bottleName()
+        while true {
+            try Task.checkCancellation()
+            let processes = try await gamingService.runningProcesses()
+            let scoped = BottleProcessSession.scopedProcesses(
+                processes,
+                bottle: bottle,
+                additionallyClaimed: await runtime.claimedProcessIDs()
+            )
+            await runtime.claimProcessIDs(scoped.map(\.pid))
+            await runtime.persistSidecar()
+            let stillRunning = BottleProcessSession.gameStillRunning(
+                processes,
+                bottle: bottle,
+                claimedPIDs: await runtime.claimedProcessIDs(),
+                gameProcessNames: ["YuanShen.exe"]
+            )
+            if !stillRunning { return .completed }
+            try await Task.sleep(for: .seconds(1))
+        }
+    }
+}
+
+private struct GenshinTerminateResidualsStep: WorkflowStepExecuting {
+    let runtimeStore: GenshinRuntimeStore
+    let gamingService: GamingService
+    let processSignaler: any ProcessSignaling
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        let runtime = try await runtimeStore.context(for: context.runID)
+        await runtime.report(.terminatingResiduals, progress: 0.97)
+        let bottle = try await runtime.bottleName()
+        let processes = try await gamingService.runningProcesses()
+        let report = await BottleProcessSession.terminate(
+            claimedPIDs: await runtime.claimedProcessIDs(),
+            processes: processes,
+            bottle: bottle,
+            signaler: processSignaler
+        )
+        if !report.failures.isEmpty {
+            throw GenshinWorkflowCoordinatorError.terminationFailed(report.failures.joined(separator: "; "))
+        }
+        return .completed
+    }
+}
+
+private struct GenshinReleaseGameModeStep: WorkflowStepExecuting {
+    let ledger: GameModeClaimLedger
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        try await ledger.release(runID: context.runID)
+        return .completed
+    }
+}
+
+private struct GenshinReleaseProcessSessionStep: WorkflowStepExecuting {
+    let runtimeStore: GenshinRuntimeStore
+    let exclusiveLocks: WorkflowExclusiveLockTable
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        let runtime = try await runtimeStore.context(for: context.runID)
+        let bottle = try await runtime.bottleName()
+        await exclusiveLocks.release(key: .processSession(bottle: bottle), runID: context.runID)
+        await exclusiveLocks.release(key: .networkGlobalIsolation, runID: context.runID)
+        await runtime.removeSidecar()
         return .completed
     }
 }
@@ -687,6 +1083,7 @@ private enum GenshinWorkflowCoordinatorError: Error, LocalizedError {
     case gameExitedBeforeTrace
     case networkLeaseFailed(String)
     case gameProcessNotFound
+    case terminationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -723,6 +1120,8 @@ private enum GenshinWorkflowCoordinatorError: Error, LocalizedError {
             tr("网络隔离租约续期失败：\(message)", "Network isolation lease renewal failed: \(message)")
         case .gameProcessNotFound:
             tr("渲染开始后未找到原神 Wine 进程", "No Genshin Wine process was found after rendering started")
+        case .terminationFailed(let message):
+            tr("结束残留进程失败：\(message)", "Failed to terminate residual processes: \(message)")
         }
     }
 }

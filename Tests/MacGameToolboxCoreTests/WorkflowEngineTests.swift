@@ -394,3 +394,70 @@ private func waitForActiveRun(_ engine: WorkflowEngine) async throws -> Workflow
         "isolate.compensateInFlight.failure"
     ])
 }
+
+@Test func workflowEngineAllowsConcurrentRunsWithDifferentIdentifiers() async throws {
+    let journal = InMemoryWorkflowJournal()
+    let first = WorkflowTestStep(id: "first", blocksUntilCancelled: true)
+    let second = WorkflowTestStep(id: "second", blocksUntilCancelled: true)
+    let engine = makeEngine(steps: ["first": first, "second": second], journal: journal)
+    let runA = UUID()
+    let runB = UUID()
+    let taskA = Task {
+        try await engine.run(makeWorkflow(id: "wf.a", stepIDs: ["first"]), runID: runA)
+    }
+    let taskB = Task {
+        try await engine.run(makeWorkflow(id: "wf.b", stepIDs: ["second"]), runID: runB)
+    }
+
+    for _ in 0..<200 {
+        if await engine.activeRunIDs() == [runA, runB] { break }
+        try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    #expect(await engine.activeRunIDs() == [runA, runB])
+    #expect(await engine.cancel(runID: runA))
+    #expect(await engine.cancel(runID: runB))
+    #expect(try await taskA.value.status == .cancelled)
+    #expect(try await taskB.value.status == .cancelled)
+}
+
+@Test func workflowEngineResumesHoldingStepInsteadOfCompensating() async throws {
+    let journal = InMemoryWorkflowJournal()
+    let runID = UUID()
+    let handle = WorkflowRecoveryHandle(capabilityID: "network.globalIsolation")
+    try await journal.append(WorkflowJournalEvent(
+        runID: runID,
+        workflowID: "test.workflow",
+        kind: .stepSucceeded,
+        status: .running,
+        stepID: "isolate",
+        recoveryHandle: handle
+    ))
+    try await journal.append(WorkflowJournalEvent(
+        runID: runID,
+        workflowID: "test.workflow",
+        kind: .stepStarted,
+        status: .running,
+        stepID: "await-exit"
+    ))
+
+    let isolateRecorder = WorkflowEventRecorder()
+    let holdingRecorder = WorkflowEventRecorder()
+    let isolate = WorkflowTestStep(id: "isolate", recorder: isolateRecorder, recoveryHandle: handle)
+    let holding = WorkflowTestStep(id: "await-exit", recorder: holdingRecorder)
+    let engine = makeEngine(steps: ["isolate": isolate, "await-exit": holding], journal: journal)
+    let workflow = CompiledWorkflow(
+        id: "test.workflow",
+        steps: [
+            WorkflowStepDefinition(id: "isolate", kind: "test.isolate"),
+            WorkflowStepDefinition(id: "await-exit", kind: "test.await-exit", holding: true)
+        ]
+    )
+
+    let result = try await engine.recover(workflow, runID: runID)
+
+    #expect(result.status == .succeeded)
+    #expect(result.completedStepIDs == ["isolate", "await-exit"])
+    #expect(await isolateRecorder.events.isEmpty)
+    #expect(await holdingRecorder.events == ["await-exit.prepare", "await-exit.execute"])
+    #expect(try await journal.incompleteRunIDs().isEmpty)
+}

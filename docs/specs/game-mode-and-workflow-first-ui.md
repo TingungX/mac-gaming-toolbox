@@ -25,11 +25,10 @@ Wine 游戏无法稳定触发 macOS 对假全屏窗口的自动 Game Mode 识别
 
 ### Game Mode
 
-- Game Mode 是一个应用级会话开关，不声明为某个游戏的自动识别结果。
-- 开启时先通过受信命令定位 `gamepolicyctl`，执行 `game-mode set on`，再检测并提升 CrossOver/Wine 进程优先级。
-- 如果进程提升失败，必须尝试把全局策略恢复为 `auto`；恢复失败要和原始错误一起报告，不能静默忽略。
-- 关闭时执行 `game-mode set auto`，将系统交还给 macOS 的自动策略。
-- `gamepolicyctl` 不存在或当前系统不支持时，组件显示不可用并保留可诊断错误；不通过猜测性的 `defaults` 写入替代真实命令。
+- Game Mode 是机器上的一份全局策略，但由工作流 run 以 **共享 claim** 占用，不由功能模块开关管辖。
+- 工作流在游戏会话中占用时执行 `game-mode set on`，并记下占用前的策略；最后一个释放 claim 的 run 才把策略写回该快照（通常是 `auto`）。
+- 功能模块仍可在没有 workflow holder 时手动开关；一旦有 run 持有 claim，该开关禁用，避免应用级开关覆盖工作流所有权。
+- `gamepolicyctl` 不存在或当前系统不支持时，工作流跳过占用并继续；组件显示不可用并保留可诊断错误，不通过猜测性的 `defaults` 写入替代真实命令。
 
 ## 验收标准
 
@@ -37,7 +36,8 @@ Wine 游戏无法稳定触发 macOS 对假全屏窗口的自动 Game Mode 识别
 - 原神工作流卡片可以查看步骤顺序，预览内容与内建 workflow plan 的稳定步骤 ID 一致。
 - 壁纸、教程、更新日志只能从 Settings 进入，不再占用首页卡片。
 - Game Mode 开启成功后状态显示为启用，并报告实际提升的进程数量。
-- Game Mode 关闭后恢复 `auto` 策略；开启过程中的进程检测失败不会遗留强制开启状态。
+- 工作流占用 Game Mode 期间，功能模块开关不能改写策略；工作流结束后由最后一个 claim 持有者恢复占用前快照。
+- 关闭手动开关后恢复 `auto` 策略；开启过程中的进程检测失败不会遗留强制开启状态。
 - 不引入任意 shell、任意 executable 或新的 root helper 能力。
 
 ## 风险与边界

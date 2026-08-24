@@ -26,6 +26,10 @@ final class AppModel: ObservableObject {
     @Published var showingTutorials = false
     @Published var showingGenshinConfiguration = false
     @Published var isGenshinWorkflowRunning = false
+    @Published var genshinWorkflowStage: GenshinWorkflowStage?
+    @Published var showingWorkflowConflict = false
+    @Published var pendingWorkflowConflicts: [WorkflowResourceConflict] = []
+    @Published var gameModeHeldByWorkflow = false
     @Published var showingProcessSelection = false
     @Published var runningProcesses: [SystemProcess] = []
     @Published var selectedProcessIDs = Set<Int32>()
@@ -93,6 +97,13 @@ final class AppModel: ObservableObject {
 
     func toggleGameMode() {
         guard gameModeAvailable, !isGameModeBusy else { return }
+        if gameModeHeldByWorkflow {
+            report(ToolboxError.commandFailed(tr(
+                "Game Mode 正由运行中的工作流持有，结束后会自动交还。",
+                "Game Mode is held by a running workflow and will be released when that workflow ends."
+            )))
+            return
+        }
         isGameModeBusy = true
         if gameModeEnabled {
             runTask(tr("正在恢复 Game Mode 自动策略", "Restoring automatic Game Mode policy")) {
@@ -196,12 +207,46 @@ final class AppModel: ObservableObject {
     }
 
     func startGenshinWorkflow() {
-        guard genshinTask == nil else { return }
         guard let installation = genshinInstallation else {
             showingGenshinConfiguration = true
             return
         }
 
+        Task { [self] in
+            let conflicts = await genshinWorkflow.exclusiveConflicts(for: installation)
+            if !conflicts.isEmpty {
+                pendingWorkflowConflicts = conflicts
+                showingWorkflowConflict = true
+                return
+            }
+            beginGenshinWorkflow(installation: installation)
+        }
+    }
+
+    func keepCurrentWorkflow() {
+        showingWorkflowConflict = false
+        pendingWorkflowConflicts = []
+    }
+
+    func replaceCurrentWorkflow() {
+        let runIDs = Array(Set(pendingWorkflowConflicts.map(\.holder.runID)))
+        guard let installation = genshinInstallation, !runIDs.isEmpty else {
+            keepCurrentWorkflow()
+            return
+        }
+        showingWorkflowConflict = false
+        pendingWorkflowConflicts = []
+        Task { [self] in
+            await genshinWorkflow.cancel(runIDs: runIDs)
+            if let genshinTask {
+                _ = await genshinTask.value
+            }
+            beginGenshinWorkflow(installation: installation)
+        }
+    }
+
+    private func beginGenshinWorkflow(installation: GameInstallation) {
+        guard genshinTask == nil else { return }
         isGenshinWorkflowRunning = true
         status = TaskStatus(
             phase: .awaitingAuthorization,
@@ -226,8 +271,10 @@ final class AppModel: ObservableObject {
             } catch {
                 report(error)
             }
+            await refreshGameModeHold()
             genshinTask = nil
             isGenshinWorkflowRunning = false
+            genshinWorkflowStage = nil
         }
     }
 
@@ -592,24 +639,67 @@ final class AppModel: ObservableObject {
 
     private func recoverIncompleteGameWorkflows() async {
         do {
-            let results = try await genshinWorkflow.recoverIncompleteRuns { [weak self] update in
+            let recovery = try await genshinWorkflow.recoverIncompleteRuns { [weak self] update in
                 await self?.applyGenshinWorkflowUpdate(update)
             }
-            guard let failed = results.first(where: { $0.status == .recoveryFailed }) else {
-                if !results.isEmpty {
-                    status = TaskStatus(
-                        phase: .succeeded,
-                        message: tr("上次中断的网络状态已恢复", "Recovered network state from the interrupted launch"),
-                        progress: 1
-                    )
-                }
+            if let failed = recovery.compensated.first(where: { $0.status == .recoveryFailed }) {
+                report(ToolboxError.commandFailed(
+                    failed.errorDescription ?? tr("上次启动的网络恢复失败", "Failed to recover network state from the previous launch")
+                ))
                 return
             }
-            report(ToolboxError.commandFailed(
-                failed.errorDescription ?? tr("上次启动的网络恢复失败", "Failed to recover network state from the previous launch")
-            ))
+            if !recovery.compensated.isEmpty {
+                status = TaskStatus(
+                    phase: .succeeded,
+                    message: tr("上次中断的网络状态已恢复", "Recovered network state from the interrupted launch"),
+                    progress: 1
+                )
+            }
+            if let runID = recovery.resumableRunIDs.first {
+                guard let installation = genshinInstallation else {
+                    report(ToolboxError.commandFailed(tr(
+                        "上次游戏会话仍在跟踪中，请先完成原神配置后再启动应用。",
+                        "A previous game session is still being tracked. Configure Genshin, then reopen the app."
+                    )))
+                    return
+                }
+                isGenshinWorkflowRunning = true
+                status = TaskStatus(
+                    phase: .running,
+                    message: tr("正在继续跟踪上次的原神会话", "Resuming the previous Genshin session"),
+                    progress: 0.94
+                )
+                genshinTask = Task { [self] in
+                    do {
+                        let result = try await genshinWorkflow.resume(
+                            runID: runID,
+                            installation: installation,
+                            metalHUDEnabled: metalHUDEnabled
+                        ) { update in
+                            await self.applyGenshinWorkflowUpdate(update)
+                        }
+                        applyGenshinWorkflowResult(result)
+                    } catch is CancellationError {
+                        status = TaskStatus(phase: .cancelled, message: tr("已取消", "Cancelled"))
+                    } catch {
+                        report(error)
+                    }
+                    await refreshGameModeHold()
+                    genshinTask = nil
+                    isGenshinWorkflowRunning = false
+                    genshinWorkflowStage = nil
+                }
+            }
         } catch {
             report(error)
+        }
+    }
+
+    private func refreshGameModeHold() async {
+        gameModeHeldByWorkflow = await genshinWorkflow.gameModeHolderCount() > 0
+        if gameModeHeldByWorkflow {
+            gameModeEnabled = true
+            gameModePolicy = .on
         }
     }
 
@@ -632,12 +722,31 @@ final class AppModel: ObservableObject {
             message = tr("已通过启动阶段，正在恢复网络", "Startup stage passed; restoring network")
         case .applyingQoS:
             message = tr("正在优化原神进程优先级", "Optimizing Genshin process priority")
+        case .claimingProcessSession:
+            message = tr("正在占用原神 CrossOver 容器", "Claiming the Genshin CrossOver bottle")
+        case .claimingGameMode:
+            message = tr("正在由本工作流占用 Game Mode", "Claiming Game Mode for this workflow")
+        case .waitingForExit:
+            message = tr("原神运行中，关闭游戏后将自动收尾", "Genshin is running; teardown starts when the game exits")
+        case .terminatingResiduals:
+            message = tr("正在结束本容器中的残留进程", "Terminating residual processes in this bottle")
+        case .releasingGameMode:
+            message = tr("正在交还 Game Mode", "Releasing Game Mode")
         }
         status.phase = update.stage == .isolatingNetwork ? .awaitingAuthorization : .running
         status.message = message
         status.progress = update.progress
+        genshinWorkflowStage = update.stage
         if status.log.last != message {
             status.log.append(message)
+        }
+        if update.stage == .claimingGameMode {
+            gameModeHeldByWorkflow = true
+            gameModeEnabled = true
+            gameModePolicy = .on
+        }
+        if update.stage == .releasingGameMode {
+            gameModeHeldByWorkflow = false
         }
     }
 
@@ -646,14 +755,14 @@ final class AppModel: ObservableObject {
         case .succeeded:
             status = TaskStatus(
                 phase: .succeeded,
-                message: tr("原神已启动，网络已恢复并完成进程优化", "Genshin launched; network restored and process optimized"),
+                message: tr("原神已退出，残留进程已结束，Game Mode 已按 claim 交还", "Genshin exited; residual processes were terminated and Game Mode was released"),
                 progress: 1,
                 log: status.log
             )
         case .cancelled:
             status = TaskStatus(
                 phase: .cancelled,
-                message: tr("已取消，网络恢复完成", "Cancelled after network restoration"),
+                message: tr("已取消，工作流副作用已恢复", "Cancelled after restoring workflow side effects"),
                 log: status.log
             )
         case .recoveryFailed:

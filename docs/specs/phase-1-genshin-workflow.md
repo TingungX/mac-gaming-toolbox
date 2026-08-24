@@ -33,7 +33,7 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - App Composition Root 已一次性组装应用用例边界、内建原神 workflow、不可变 `WorkflowStepRegistry` 和持久化 journal；`AppModel` 不再直接持有或编排具体系统服务。
 - helper 保持单一 root 进程；原有 health、hosts、QoS、缓存、主机名和目录请求已拆成独立 handler，并由只读兼容注册表分发，原有 XPC 行为不变。
 - `network.globalIsolation@1` 已通过正式 capability envelope 和 `PrivilegedCapabilityRegistry` 接入。PF handler 使用固定子 anchor、独占 enable token、60 秒上限租约、续租、root 快照、规则/恢复验证和异常快照紧急清理。
-- 原神内建流程已连接预检、PF 隔离、可选 MetalHUD、`cxstart` 自动启动、`UnityGfxDeviceWorker` readiness、网络恢复和 QoS，并提供取消与 App journal 崩溃恢复。
+- 原神内建流程已连接预检、容器独占锁、PF 隔离、可选 MetalHUD、`cxstart` 自动启动、`UnityGfxDeviceWorker` readiness、网络恢复、QoS、Game Mode claim、等待退出、残留进程清理和 claim 释放，并提供取消与 App journal 崩溃恢复。
 - 本机安装绑定只保存 CrossOver App、bottle 和 Windows 启动路径；配置界面可发现常见 CrossOver 安装、bottle 和 `YuanShen.exe`，不把本机路径写入工作流定义。
 - 外部 Recipe loader/compiler、完整游戏优先首页和正式品牌迁移尚未实现；现阶段只运行受信任的内建强类型流程。
 
@@ -77,7 +77,11 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
   -> 等待“反作弊启动阶段已通过”的 readiness probe
   -> 恢复并验证网络
   -> 对已识别的游戏进程树应用 QoS
-  -> 进入运行中状态
+  -> 由本 run 占用 Game Mode
+  -> 等待本容器中的原神进程退出
+  -> 只终止本 run 声称的残留进程
+  -> 释放 Game Mode claim
+  -> 释放容器独占锁
 ```
 
 任何一步失败、取消或超时都进入补偿流程。只有网络和其他系统状态验证恢复后，UI 才能显示最终失败或取消状态。

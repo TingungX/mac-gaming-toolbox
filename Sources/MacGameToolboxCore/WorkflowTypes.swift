@@ -14,12 +14,58 @@ public struct WorkflowStepDefinition: Codable, Equatable, Hashable, Sendable {
     public let kind: String
     public let version: Int
     public let input: Data
+    /// Holding steps wait on an external condition (for example a game process
+    /// exiting). An incomplete run that is inside a holding step resumes that
+    /// step instead of compensating the launch side effects.
+    public let holding: Bool
 
-    public init(id: WorkflowStepID, kind: String, version: Int = 1, input: Data = Data()) {
+    public init(
+        id: WorkflowStepID,
+        kind: String,
+        version: Int = 1,
+        input: Data = Data(),
+        holding: Bool = false
+    ) {
         self.id = id
         self.kind = kind
         self.version = version
         self.input = input
+        self.holding = holding
+    }
+}
+
+public enum WorkflowIncompleteRunAction: Equatable, Sendable {
+    case compensate
+    case resume(fromStepID: WorkflowStepID)
+}
+
+public enum WorkflowRecoveryPlanner {
+    /// Launch-phase crashes compensate. A crash inside a holding step resumes
+    /// that step so a still-running game is not torn down by App relaunch.
+    public static func action(
+        for events: [WorkflowJournalEvent],
+        workflow: CompiledWorkflow
+    ) -> WorkflowIncompleteRunAction {
+        let holdingIDs = Set(workflow.steps.filter(\.holding).map(\.id))
+        var inFlight: WorkflowStepID?
+        for event in events {
+            switch event.kind {
+            case .stepStarted:
+                inFlight = event.stepID
+            case .stepSucceeded, .stepFailed:
+                if event.stepID == inFlight {
+                    inFlight = nil
+                }
+            case .runFinished:
+                return .compensate
+            default:
+                continue
+            }
+        }
+        if let inFlight, holdingIDs.contains(inFlight) {
+            return .resume(fromStepID: inFlight)
+        }
+        return .compensate
     }
 }
 
@@ -265,7 +311,7 @@ public enum WorkflowEngineError: Error, LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .runAlreadyActive(let runID):
-            return "A workflow run is already active: \(runID.uuidString)"
+            return "Workflow run is already active: \(runID.uuidString)"
         case .invalidWorkflow(let message):
             return "Invalid workflow: \(message)"
         case .recoveryUnavailable(let runID, let message):

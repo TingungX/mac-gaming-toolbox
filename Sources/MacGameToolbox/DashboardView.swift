@@ -82,6 +82,9 @@ struct DashboardView: View {
         .sheet(isPresented: $model.showingGenshinConfiguration) {
             GenshinConfigurationView().environmentObject(model)
         }
+        .sheet(isPresented: $model.showingWorkflowConflict) {
+            WorkflowConflictSheet().environmentObject(model)
+        }
         .alert(cacheAlertTitle, isPresented: $model.showingCacheConfirmation) {
             Button(tr("取消", "Cancel"), role: .cancel) {}
             Button(model.cacheConfirmationStage == 1 ? tr("继续", "Continue") : tr("确认删除", "Delete"), role: model.configuration.excludesSensitiveCacheFiles ? nil : .destructive) { model.confirmCacheCleaning() }
@@ -134,7 +137,7 @@ struct DashboardView: View {
                 }
                 Spacer(minLength: 8)
                 if model.isGenshinWorkflowRunning {
-                    Button(tr("取消并恢复网络", "Cancel and restore network")) { model.cancelGenshinWorkflow() }
+                    Button(cancelWorkflowTitle) { model.cancelGenshinWorkflow() }
                 }
                 Text(AppLanguage.phase(model.status.phase))
                     .font(.caption)
@@ -149,12 +152,11 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private var launchProgramCards: some View {
-        FeatureCard(icon: "gamecontroller.fill", title: tr("原神一键启动", "Genshin One-click Launch"), subtitle: tr("短时隔离网络，自动启动原神；检测到渲染线程后立即恢复网络并优化进程", "Briefly isolates the network, launches Genshin, restores connectivity at rendering start, and optimizes the process")) {
+        FeatureCard(icon: "gamecontroller.fill", title: tr("原神一键启动", "Genshin One-click Launch"), subtitle: tr("短时隔离网络并自动启动；游戏退出后结束残留进程并交还 Game Mode", "Briefly isolates the network and launches automatically; after the game exits, residual processes are terminated and Game Mode is released")) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .bottom) {
                     Button(tr("启动原神", "Launch Genshin")) { model.startGenshinWorkflow() }
                         .liquidGlassButton(prominent: true)
-                        .disabled(model.isGenshinWorkflowRunning)
                     Spacer()
                     Button(model.genshinInstallation == nil ? tr("首次配置", "Set up") : tr("配置", "Configure")) {
                         model.showingGenshinConfiguration = true
@@ -199,7 +201,7 @@ struct DashboardView: View {
                             model.toggleGameMode()
                         }
                         .liquidGlassButton(prominent: !model.gameModeEnabled)
-                        .disabled(model.isGameModeBusy)
+                        .disabled(model.isGameModeBusy || model.gameModeHeldByWorkflow)
                     } else {
                         Label(tr("当前系统不可用", "Unavailable on this system"), systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.secondary)
@@ -271,14 +273,26 @@ struct DashboardView: View {
         }
     }
 
+    private var cancelWorkflowTitle: String {
+        switch model.genshinWorkflowStage {
+        case .waitingForExit, .terminatingResiduals, .releasingGameMode, .claimingGameMode:
+            tr("结束工作流", "End workflow")
+        default:
+            tr("取消并恢复网络", "Cancel and restore network")
+        }
+    }
+
     private var gameModePolicyCaption: String {
+        if model.gameModeHeldByWorkflow {
+            return tr("由工作流持有", "Held by a workflow")
+        }
         switch model.gameModePolicy {
         case .on:
-            tr("全局强制开启", "Forced on globally")
+            return tr("全局强制开启", "Forced on globally")
         case .off:
-            tr("已关闭", "Off")
+            return tr("已关闭", "Off")
         case .automatic, nil:
-            tr("自动", "Auto")
+            return tr("自动", "Auto")
         }
     }
 
@@ -468,6 +482,55 @@ private struct ProcessSelectionView: View {
         }
         .padding(22)
         .frame(minWidth: 680, minHeight: 520)
+    }
+}
+
+private struct WorkflowConflictSheet: View {
+    @EnvironmentObject private var model: AppModel
+
+    private let guidance = Color(red: 201 / 255, green: 99 / 255, blue: 58 / 255)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(tr("工作流资源冲突", "Workflow resource conflict"))
+                .font(.title3.bold())
+            Text(conflictDetail)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button(action: model.keepCurrentWorkflow) {
+                    Text(tr("保持当前工作流", "Keep the current workflow"))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(guidance)
+                .help(tr("推荐：不中断正在运行的游戏", "Recommended: do not interrupt the running game"))
+
+                Button(role: .destructive, action: model.replaceCurrentWorkflow) {
+                    Text(tr("结束当前工作流并启动新的", "End the current workflow and start the new one"))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 420)
+    }
+
+    private var conflictDetail: String {
+        let titles = Set(model.pendingWorkflowConflicts.map(\.holder.title))
+        let names = titles.sorted().joined(separator: "、")
+        if model.pendingWorkflowConflicts.contains(where: { $0.lockKey == .networkGlobalIsolation }) {
+            return tr(
+                "\(names) 仍占用全局网络隔离或同一 CrossOver 容器。选择保持当前，或结束它（会收尾并可能结束游戏）后再启动。",
+                "\(names) still holds global network isolation or the same CrossOver bottle. Keep the current workflow, or end it (teardown may quit the game) and then start the new one."
+            )
+        }
+        return tr(
+            "\(names) 仍占用同一 CrossOver 容器。选择保持当前，或结束它（会收尾并可能结束游戏）后再启动。",
+            "\(names) still holds the same CrossOver bottle. Keep the current workflow, or end it (teardown may quit the game) and then start the new one."
+        )
     }
 }
 

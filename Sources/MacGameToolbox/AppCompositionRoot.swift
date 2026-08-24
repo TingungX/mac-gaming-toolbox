@@ -41,12 +41,16 @@ enum AppCompositionRoot {
         let initializationError: String?
         do {
             let journal = try FileWorkflowJournal(url: journalURL)
+            let exclusiveLocks = WorkflowExclusiveLockTable()
+            let gameModeClaims = GameModeClaimLedger(service: gameModeService)
             workflow = try GenshinWorkflowCoordinator(
                 capabilityClient: privileged,
                 privileged: privileged,
                 gamingService: gamingService,
                 journal: journal,
-                runsDirectory: runsDirectory
+                runsDirectory: runsDirectory,
+                exclusiveLocks: exclusiveLocks,
+                gameModeClaims: gameModeClaims
             )
             initializationError = nil
         } catch {
@@ -70,7 +74,22 @@ private actor UnavailableGenshinWorkflowCoordinator: GenshinWorkflowCoordinating
         self.message = message
     }
 
+    func exclusiveConflicts(for installation: GameInstallation) async -> [WorkflowResourceConflict] {
+        []
+    }
+
+    func gameModeHolderCount() async -> Int { 0 }
+
     func run(
+        installation: GameInstallation,
+        metalHUDEnabled: Bool,
+        update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
+    ) async throws -> WorkflowRunResult {
+        throw ToolboxError.commandFailed(message)
+    }
+
+    func resume(
+        runID: WorkflowRunID,
         installation: GameInstallation,
         metalHUDEnabled: Bool,
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
@@ -80,9 +99,11 @@ private actor UnavailableGenshinWorkflowCoordinator: GenshinWorkflowCoordinating
 
     func cancel() async {}
 
+    func cancel(runIDs: [WorkflowRunID]) async {}
+
     func recoverIncompleteRuns(
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
-    ) async throws -> [WorkflowRunResult] {
+    ) async throws -> GenshinWorkflowRecovery {
         throw ToolboxError.commandFailed(message)
     }
 }
