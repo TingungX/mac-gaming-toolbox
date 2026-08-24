@@ -10,6 +10,7 @@
 ## 已接受决策
 
 - [ADR-0001：外部可编辑、能力受限的工作流配方](decisions/0001-capability-bounded-external-recipes.md)
+- [ADR-0002：单一特权 helper 与双能力注册表](decisions/0002-single-helper-dual-capability-registries.md)
 
 ## 文档状态
 
@@ -18,4 +19,3 @@
 - `accepted`：架构决策已经接受；后续变更通过新 ADR 替代。
 - `superseded`：已被更新设计或决策替代。
 - `archived`：仅供历史追溯。
-

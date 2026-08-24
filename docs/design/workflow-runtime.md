@@ -5,7 +5,7 @@ Owner: TingungX
 Last updated: 2026-08-24  
 Scope: 外部游戏配方、工作流执行、状态恢复、特权能力调用  
 Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/`, `Sources/MacGameToolboxPrivilegedHelper/`  
-Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../specs/phase-1-genshin-workflow.md`
+Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../specs/phase-1-genshin-workflow.md`
 
 ## 背景与问题
 
@@ -15,6 +15,8 @@ Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../sp
 - 系统副作用只依赖局部 `defer` 风格恢复；App、helper 或系统异常退出后没有统一事务记录。
 - 游戏差异硬编码在服务和界面中，新增游戏会继续扩大条件分支。
 - 当前 XPC 请求表达单次操作，不表达运行租约、补偿动作或崩溃恢复。
+- `AppModel` 直接创建具体服务并编排具体能力，界面状态、应用用例和系统副作用没有边界。
+- root helper 通过一个不断扩张的 `switch` 承担鉴权、分发、参数验证和能力实现，难以独立测试与演进。
 
 目标不是增加一个通用脚本执行器，而是建立一套由外部配方描述、由 App 内受信代码执行的游戏工作流运行时。
 
@@ -26,6 +28,8 @@ Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../sp
 - 所有系统副作用都具备可验证的补偿动作、持久记录和超时恢复。
 - 运行日志能够回答每一步何时开始、为何完成、为何失败以及是否完成恢复。
 - 配方与本机安装信息分离，使配方可以共享，而不携带用户路径或机器状态。
+- `AppModel` 只负责呈现状态和转发用户意图，不再认识 hosts、QoS、网络或具体游戏服务。
+- 一个 root helper 进程内按能力拆分 handler，避免多个特权进程带来的安装、签名、升级和恢复成本。
 
 ## 非目标
 
@@ -33,9 +37,25 @@ Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../sp
 - 第一阶段不建立在线配方市场、远程自动更新或配方签名基础设施。
 - 第一阶段不承诺定向绕过任何反作弊；网络策略必须由本机实测证据决定。
 - 第一阶段不并行运行多个游戏工作流。
+- 第一阶段不拆分多个 root helper 进程。
 - `Mac GameFlow` 只是内部工作名，本设计不决定正式品牌。
 
 ## 核心模型
+
+### CapabilityContract
+
+App 与 helper 只共享稳定的能力契约，不共享具体 handler 或游戏实现。每个 contract 至少描述：
+
+- 稳定 capability ID 与独立 contract version；
+- 输入 schema ID/version、大小限制与输出 schema；
+- 普通权限或特权权限声明；
+- 资源锁声明及由受信代码实现的 lock-key resolver；
+- 是否产生系统副作用；
+- 是否可回滚、回滚幂等性和 recovery token 版本。
+
+Recipe 可以引用 capability ID，但不能定义 contract、资源锁或回滚逻辑。App 侧 contract 校验用于提前反馈和生成权限摘要，不构成安全边界；helper 必须根据自己的注册表重新解码、限制大小、验证版本和输入。
+
+App 可以依据 contract 提前阻止冲突 workflow；特权资源锁的 lock key 必须由 helper 内受信 resolver 重新计算并强制执行，不能接受 Recipe 或 App 直接提交的锁结论。
 
 ### Recipe
 
@@ -75,7 +95,9 @@ Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../sp
 
 ### CompiledWorkflow
 
-运行前将 Recipe、GameInstallation 和当前运行时 capability 合并为不可变执行计划。编译阶段完成：
+`WorkflowEngine` 不知道计划来源。迁移阶段的内建强类型 `WorkflowDefinition` 与后续外部 Recipe 都进入同一 compiler；外部 Recipe loader 只负责把数据转换成受限 definition。
+
+运行前将 WorkflowDefinition、GameInstallation 和当前运行时 capability 合并为不可变执行计划。编译阶段完成：
 
 - schema 与语义验证；
 - capability 声明和实际步骤的一致性检查；
@@ -91,28 +113,56 @@ Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../sp
 ```mermaid
 flowchart LR
     Recipe[外部 Recipe] --> Loader[Recipe Loader]
+    BuiltIn[内建强类型 WorkflowDefinition] --> Compiler[Workflow Compiler]
     Install[本机 GameInstallation] --> Compiler[Workflow Compiler]
     Loader --> Validator[Schema + Capability Validator]
     Validator --> Compiler
     Compiler --> Plan[CompiledWorkflow]
     Plan --> Engine[WorkflowEngine actor]
-    Engine --> Registry[受信 Step Executor Registry]
+    AppRoot[App Composition Root] --> StepRegistry[WorkflowStepRegistry]
+    StepRegistry --> Engine
+    Engine --> Step[WorkflowStepExecuting]
     Engine <--> Journal[Workflow Journal]
-    Registry --> Launch[Game Launcher]
-    Registry --> Probe[Process / Readiness Probe]
-    Registry --> Local[本地能力服务]
-    Registry --> XPC[语义化 XPC]
-    XPC --> Helper[Privileged Helper]
-    Helper <--> RootJournal[Root-owned Lease + Snapshot]
+    Step --> Local[本地步骤实现]
+    Step --> XPC[Capability Invocation XPC]
+    HelperRoot[Helper Composition Root] --> CapabilityRegistry[PrivilegedCapabilityRegistry]
+    XPC --> Helper[单一 Privileged Helper]
+    Helper --> CapabilityRegistry
+    CapabilityRegistry --> Handler[PrivilegedCapabilityHandling]
+    Handler <--> RootJournal[Root-owned Recovery Token + Snapshot]
+    Contract[CapabilityContract] --> Validator
+    Contract --> StepRegistry
+    Contract --> CapabilityRegistry
 ```
 
 边界规则：
 
 - Recipe Loader 只读取数据，不执行数据。
-- Step Executor Registry 由编译进 App 的代码构成，配方不能注册新 executor。
+- `WorkflowStepRegistry` 只注册 App 进程内受信的步骤 executor，配方不能注册新 executor。
+- `PrivilegedCapabilityRegistry` 只注册 helper 内受信的原子能力 handler。
+- 两个注册表只能在各自 Composition Root 组装，构造完成后不可修改，并通过显式依赖注入传递；禁止暴露成全局 Service Locator。
 - 工作流引擎不直接拼装 shell 命令。
-- helper 继续逐项验证参数，并只接受语义化的 `PrivilegedRequest`。
+- 工作流引擎只认识步骤协议，不认识具体游戏；helper 只认识特权能力协议，不认识具体游戏或 Recipe。
+- helper 继续鉴权 XPC client，并根据自己的 contract 与 handler 重新验证每次 invocation；App 的预验证结果不可复用为信任结论。
 - 用户态 journal 记录流程；root-owned journal 只记录恢复特权副作用所需的最小快照和租约。
+
+### WorkflowStepRegistry
+
+App Composition Root 将游戏启动、进程等待、readiness probe、MetalHUD 和特权能力适配步骤注册为不可变映射。每个 entry 由 step kind/version、声明的 capabilities 和 executor factory 构成。
+
+`WorkflowEngine` 只通过 `WorkflowStepExecuting` 获取 prepare、execute 和 compensate 语义。`AppModel` 只依赖更高层的 `WorkflowCoordinating` 与只读运行状态，不直接持有具体 step executor 或系统服务。
+
+### PrivilegedCapabilityRegistry
+
+helper Composition Root 将网络、hosts、QoS、磁盘和主机名等能力注册为不可变映射。XPC 层只负责可信客户端检查、envelope 限制和 registry dispatch；每个 handler 独立完成强类型解码、领域验证、执行和回滚。
+
+保留一个 root helper 进程。它统一持有资源锁与 root journal，但能力实现拆到独立 handler；暂不创建多个 LaunchDaemon 或 Mach service。
+
+### Capability Invocation
+
+跨 XPC envelope 只携带 run ID、step ID、capability ID/version 和受大小限制的编码输入。helper 返回强类型输出摘要，以及副作用能力对应的不透明 recovery handle。
+
+recovery handle 只暴露 token ID、capability ID/version，不携带 root 快照。helper 在改变系统状态前先将真实快照和 token 写入 root-owned journal，再执行能力并标记 token active。即使 App 在收到回复、但尚未来得及更新用户态补偿栈时崩溃，helper 仍能发现并恢复 active token。
 
 ## 执行状态机
 
@@ -148,6 +198,8 @@ App/helper unexpected exit
 5. 持久化“已执行”，再进入下一步。
 
 失败或取消时按相反顺序执行补偿。补偿必须幂等；某个补偿失败时继续尝试其他独立补偿，并最终报告所有未恢复项，不能用 `try?` 静默吞掉。
+
+特权步骤的补偿栈保存 helper 返回的不透明 recovery handle。回滚时 App 只提交 handle；helper 根据原 capability/version 找到相同 handler、读取 root 快照并重新验证当前状态。Recipe 不能创建、修改或伪造 recovery handle。
 
 ### 网络隔离租约
 
@@ -200,6 +252,9 @@ App/helper unexpected exit
 
 - Recipe parser、validator 和 compiler 的纯逻辑单元测试。
 - 未知步骤、任意命令字段、绝对 executable 路径、超限 timeout 和 capability 不匹配均被拒绝。
+- 两个注册表只能由 Composition Root 构造，启动后注册失败或重复 capability ID 会直接阻止启动。
+- helper 对畸形 payload、错误版本、越权 capability 和伪造 recovery handle 的独立拒绝测试。
+- 现有 helper 请求迁移到 handler 后具有行为等价测试，确保拆分本身不改变系统操作。
 - 引擎成功、失败、取消和反向补偿顺序测试。
 - journal 在每个步骤边界注入崩溃后的恢复测试。
 - helper 租约到期、helper 重启和 App 重启恢复测试。
@@ -212,4 +267,3 @@ App/helper unexpected exit
 - 原神“反作弊已通过”的可自动验证信号。
 - 全局网络隔离的具体系统实现。
 - CrossOver 启动适配器需要支持的最低版本和 bottle 发现方式。
-

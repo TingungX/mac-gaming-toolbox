@@ -5,7 +5,7 @@ Owner: TingungX
 Last updated: 2026-08-24  
 Scope: 原神、CrossOver、短时网络隔离、自动恢复、工作流基础设施  
 Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/GamingServices.swift`, `Sources/MacGameToolboxCore/HostsFileEditor.swift`, `Sources/MacGameToolboxCore/NetworkProxyBypass.swift`, `Sources/MacGameToolboxPrivilegedHelper/main.swift`  
-Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`
+Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`
 
 ## 问题
 
@@ -19,6 +19,9 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 成功基线为“先断网，再启动游戏”。
 - 网络方案采用“先稳后精”：先把已验证的全局网络闸门自动化并保证恢复，同时采集证据；后续再判断能否定向隔离。
 - 游戏流程由外部可编辑、能力受限的 Recipe 描述。
+- App 侧使用不可变 `WorkflowStepRegistry`，helper 侧使用不可变 `PrivilegedCapabilityRegistry`；两边只共享稳定 `CapabilityContract`。
+- 保留一个 root helper 进程，在进程内拆分能力 handler，暂不拆成多个特权服务。
+- 解耦顺序优先于外部配方和新 UI：先切断 `AppModel` 与 helper 大 `switch`，再建立事务恢复，最后开放 Recipe。
 - fork 最终采用独立品牌与 App 身份；`Mac GameFlow` 暂作内部工作名，品牌迁移不阻塞本 spec。
 
 ## 目标
@@ -37,6 +40,7 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 不拦截或解密 TLS，不记录账号或游戏数据正文。
 - 第一阶段不支持崩坏：星穹铁道、绝区零的完整配方。
 - 第一阶段不实现在线配方市场。
+- 第一阶段不拆分多个 root helper 进程，也不建立可在运行时修改的全局 Service Locator。
 - 在获得实测证据前不决定 PF、网络服务禁用或 Network Extension 的最终方向。
 
 ## 用户流程
@@ -138,45 +142,62 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 
 ## 实施顺序
 
-### 1. 诊断基线
+### 0. 诊断与行为基线
 
 - 建立可重复的三组启动记录。
 - 找到 readiness 候选信号。
-- 用证据选择全局网络闸门实现并新增 ADR。
+- 为当前 `PrivilegedRequest`、helper 分发和 HoYo 流程补齐 characterization tests。
+- 用证据选择全局网络闸门实现并新增 ADR；结构解耦不得预设这一结论。
 
 退出条件：至少一条成功断网运行和对应失败对照具有完整、可比较的时间线。
 
-### 2. Workflow Core
+### 1. 共享能力契约与双注册表
+
+- 在共享 core 中建立版本化 `CapabilityContract` 与 invocation/result/recovery-handle envelope。
+- 在 App Composition Root 建立不可变 `WorkflowStepRegistry`。
+- 在 helper Composition Root 建立不可变 `PrivilegedCapabilityRegistry`。
+- 定义重复 ID、未知版本、输入大小、权限、资源锁与副作用元数据的启动期校验。
+
+退出条件：双注册表只能由 Composition Root 构造；启动后不可变；不存在全局 Service Locator 或任意命令 capability。
+
+### 2. 拆分 helper 能力 handler
+
+- 保留一个 root helper 进程和现有 XPC 对外行为。
+- 将大 `switch` 中的 hosts、QoS、缓存、磁盘目录和主机名操作逐项迁入独立 handler。
+- XPC service 只负责可信客户端检查、envelope 限制与 registry dispatch。
+- 每个 handler 在 helper 内重新强类型解码和验证，不信任 App 侧验证结果。
+- 使用 characterization tests 证明迁移前后行为一致。
+
+退出条件：helper 核心分发不再按具体能力扩张 `switch`；现有 UI 和请求行为不变。
+
+### 3. 抽出 WorkflowEngine 并迁移 HoYo 流程
+
+- 实现只依赖 `WorkflowStepExecuting` 的单运行引擎。
+- 先用内建、强类型 workflow plan 迁移现有 HoYo 倒计时、hosts 和 QoS 流程，不同时开放外部 Recipe。
+- 将具体能力编排从 `AppModel` 移出；`AppModel` 只调用 `WorkflowCoordinating` 并映射呈现状态。
+- 通过 `WorkflowStepRegistry` 接入启动、进程等待、MetalHUD 和特权 capability adapter。
+
+退出条件：`AppModel` 和 WorkflowEngine 都不直接认识 hosts、网络、QoS handler 或具体游戏服务；旧流程行为仍可回归验证。
+
+### 4. 事务日志、取消与崩溃恢复
+
+- 实现用户态 workflow journal 和反向补偿栈。
+- 副作用 handler 在 root journal 中先保存快照，再返回不透明 recovery handle。
+- 实现取消、App 重启、helper 重启、租约过期与 stale run 恢复。
+- 根据诊断证据实现选定的网络隔离 handler、租约和原神 readiness probe。
+- 实现用户绑定和 CrossOver 启动适配器，将 QoS 与可选 MetalHUD 接入最终流程。
+
+退出条件：所有步骤边界的失败、取消和模拟崩溃都有确定补偿结果；App 强退、helper 重启或租约过期不会永久断网；原神无需固定倒计时或手动启动即可完成一次成功流程。
+
+### 5. 外部 Recipe 与游戏优先 UI
 
 - 实现 Recipe loader、validator、GameInstallation 和 compiler。
-- 实现单运行 WorkflowEngine、journal 和反向补偿。
-- 先使用无特权 fake executor 完成状态机与故障注入测试。
-
-退出条件：所有步骤边界的失败、取消和模拟崩溃都能得到确定的补偿结果。
-
-### 3. 特权网络租约
-
-- 扩展语义化 XPC 请求和 helper root journal。
-- 实现隔离、续租、恢复、过期恢复和启动恢复。
-- 验证不会覆盖或删除其他工具的网络配置。
-
-退出条件：App 强制退出、helper 重启、租约过期后网络均自动恢复，且原始状态逐项验证一致。
-
-### 4. CrossOver 与原神适配
-
-- 实现用户绑定和 CrossOver 启动适配器。
-- 实现经证据确认的 readiness probe。
-- 将现有 QoS 和可选 MetalHUD executor 接入工作流。
-
-退出条件：无需固定倒计时或手动启动即可完成一次成功流程。
-
-### 5. 游戏优先 UI
-
+- 外部 Recipe 只能引用 `WorkflowStepRegistry` 公开的白名单 step/capability ID；特权步骤由受信 adapter 映射到 helper contract，Recipe 不能直接访问 helper registry、注册 handler 或携带任意 shell。
 - 首页改为游戏列表与每款游戏的主要启动按钮。
 - 展示当前 step、恢复状态和精简日志。
 - 将原有单项组件移入高级工具或游戏配置，不再与一键启动争夺主层级。
 
-退出条件：用户能从首页完成配置、启动、取消和失败恢复，不需要理解底层组件顺序。
+退出条件：用户能导入受限配方，并从首页完成配置、启动、取消和失败恢复，不需要理解底层组件顺序。
 
 ### 6. 身份迁移与发布准备
 
@@ -194,6 +215,10 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 取消、readiness 超时、游戏立即退出、App 强退和 helper 重启均不会永久断网。
 - 恢复失败不会被报告为成功或普通取消。
 - 外部 Recipe 中的任意 shell、任意 executable 和未知特权 capability 均被拒绝。
+- `AppModel` 不再直接编排具体能力，helper 不再通过单一大 `switch` 实现具体能力。
+- 两个注册表只在 Composition Root 组装并在启动后保持不可变。
+- App 侧校验无法替代 helper 的独立解码、版本、权限和输入验证。
+- 每个进入工作流的副作用 handler 都返回不透明 recovery handle，root 快照不离开 helper。
 - 现有 hosts block 不再作为原神主流程的事实来源。
 - 单元测试、集成测试、Swift build/test 与 Xcode 构建无新增 warning。
 
@@ -210,4 +235,3 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 首个验收环境使用哪个 CrossOver 版本、bottle 和原神渠道？
 - 全局网络闸门采用哪个候选实现？
 - 第一版 Recipe 的字段、大小、步骤数量和 timeout 上限是多少？
-
