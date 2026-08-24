@@ -1,5 +1,86 @@
 import SwiftUI
 
+struct SettingsView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var presentedPage: SettingsPage?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack(spacing: 12) {
+                        Image(systemName: "photo.fill.on.rectangle.fill")
+                            .foregroundStyle(.purple)
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(tr("自定义壁纸", "Custom wallpaper"))
+                                .font(.headline)
+                            Text(model.configuration.customWallpaperPath == nil
+                                 ? tr("使用默认背景", "Using the default background")
+                                 : tr("已设置自定义背景", "A custom background is active"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(model.configuration.customWallpaperPath == nil
+                               ? tr("导入", "Import")
+                               : tr("重新导入", "Replace")) {
+                            model.importWallpaper()
+                        }
+                        if model.configuration.customWallpaperPath != nil {
+                            Button(tr("恢复默认", "Reset")) {
+                                model.resetWallpaper()
+                            }
+                        }
+                    }
+                } header: {
+                    Text(tr("外观", "Appearance"))
+                } footer: {
+                    Text(tr("壁纸只保存在本机，不会进入可分享的工作流配置。", "Wallpaper is stored locally and is not part of shareable workflow configuration."))
+                }
+
+                Section {
+                    Button {
+                        presentedPage = .tutorials
+                    } label: {
+                        Label(tr("教程总导航", "Tutorial Hub"), systemImage: "book.pages.fill")
+                    }
+                    Button {
+                        presentedPage = .changelog
+                    } label: {
+                        Label(tr("更新日志", "Changelog"), systemImage: "clock.arrow.circlepath")
+                    }
+                } header: {
+                    Text(tr("关于", "Information"))
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(tr("设置", "Settings"))
+        }
+        .sheet(item: $presentedPage) { page in
+            switch page {
+            case .tutorials:
+                TutorialsView()
+            case .changelog:
+                ChangelogView()
+            }
+        }
+        .onChange(of: model.showingTutorials, initial: true) { _, isRequested in
+            guard isRequested else { return }
+            presentedPage = .tutorials
+            model.showingTutorials = false
+        }
+        .frame(minWidth: 620, minHeight: 420)
+    }
+}
+
+private enum SettingsPage: String, Identifiable {
+    case tutorials
+    case changelog
+
+    var id: String { rawValue }
+}
+
 struct ChangelogView: View {
     @Environment(\.dismiss) private var dismiss
 

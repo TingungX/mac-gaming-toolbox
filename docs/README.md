@@ -6,6 +6,7 @@
 
 - [工作流运行时设计](design/workflow-runtime.md) — 配方加载、执行状态机、补偿恢复与特权边界。
 - [第一阶段：原神一键启动工作流](specs/phase-1-genshin-workflow.md) — 第一阶段范围、证据收集、实施顺序与验收标准。
+- [工作流优先界面与 Game Mode 组件](specs/game-mode-and-workflow-first-ui.md) — 主导航、工作流预览和全局 Game Mode 组合能力。
 
 ## 已接受决策
 

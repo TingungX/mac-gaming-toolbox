@@ -14,11 +14,13 @@ final class AppModel: ObservableObject {
     @Published var selectedDiskIDs = Set<String>()
     @Published var diskPaths: [String: String] = [:]
     @Published var metalHUDEnabled = false
+    @Published var gameModeEnabled = false
+    @Published var gameModeAvailable = false
+    @Published var gameModePolicy: GameModePolicy?
     @Published var cacheScan: CacheScan?
     @Published var showingDiskManager = false
     @Published var showingCacheConfirmation = false
     @Published var cacheConfirmationStage = 0
-    @Published var showingChangelog = false
     @Published var showingTutorials = false
     @Published var showingGenshinConfiguration = false
     @Published var isGenshinWorkflowRunning = false
@@ -50,6 +52,14 @@ final class AppModel: ObservableObject {
             catch { report(error) }
             metalHUDEnabled = await application.metalHUDEnabled()
             do {
+                let gameMode = try await application.gameModeStatus()
+                gameModeAvailable = true
+                gameModeEnabled = gameMode.isEnabled
+                gameModePolicy = gameMode.policy
+            } catch {
+                DiagnosticFileLogger.write("Game Mode unavailable: \(error.localizedDescription)")
+            }
+            do {
                 try await application.cleanLegacyHoYoStateIfNeeded()
             } catch {
                 DiagnosticFileLogger.write("Legacy HoYo state cleanup failed: \(error.localizedDescription)")
@@ -71,6 +81,43 @@ final class AppModel: ObservableObject {
             try await self.application.setMetalHUD(enabled: enabled)
             self.metalHUDEnabled = enabled
             return enabled ? tr("MetalHUD 已开启", "MetalHUD enabled") : tr("MetalHUD 已关闭", "MetalHUD disabled")
+        }
+    }
+
+    func toggleGameMode() {
+        if gameModeEnabled {
+            runTask(tr("正在恢复 Game Mode 自动策略", "Restoring automatic Game Mode policy")) {
+                try await self.application.setGameModePolicy(.automatic)
+                self.gameModeEnabled = false
+                self.gameModePolicy = .automatic
+                return tr("Game Mode 已关闭，已恢复自动策略", "Game Mode disabled; automatic policy restored")
+            }
+            return
+        }
+
+        runTask(tr("正在开启 Game Mode", "Enabling Game Mode")) {
+            try await self.application.setGameModePolicy(.on)
+            let processCount: Int
+            do {
+                processCount = try await self.application.prioritizeCrossOverProcesses()
+            } catch {
+                do {
+                    try await self.application.setGameModePolicy(.automatic)
+                } catch let rollbackError {
+                    throw ToolboxError.commandFailed(tr(
+                        "Game Mode 已开启，但恢复自动策略失败：\(rollbackError.localizedDescription)。原始错误：\(error.localizedDescription)",
+                        "Game Mode was enabled, but restoring automatic policy failed: \(rollbackError.localizedDescription). Original error: \(error.localizedDescription)"
+                    ))
+                }
+                throw error
+            }
+            self.gameModeAvailable = true
+            self.gameModeEnabled = true
+            self.gameModePolicy = .on
+            return tr(
+                "Game Mode 已开启，已优化 \(processCount) 个进程",
+                "Game Mode enabled; optimized \(processCount) process(es)"
+            )
         }
     }
 

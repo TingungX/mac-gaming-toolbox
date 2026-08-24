@@ -239,6 +239,54 @@ actor RecordingCommandRunner: CommandRunning {
     }
 }
 
+actor GameModeCommandRunner: CommandRunning {
+    private(set) var calls: [(String, [String])] = []
+
+    func run(_ executable: String, arguments: [String]) async throws -> CommandResult {
+        calls.append((executable, arguments))
+        if executable == "/usr/bin/xcrun" {
+            return CommandResult(
+                exitCode: 0,
+                standardOutput: Data("/Applications/Xcode.app/Contents/Developer/usr/bin/gamepolicyctl\n".utf8),
+                standardError: Data()
+            )
+        }
+        if arguments == ["game-mode", "status"] {
+            return CommandResult(
+                exitCode: 0,
+                standardOutput: Data("Game mode is \u{001B}[0;32mon\u{001B}[0;0m.\nGame mode enablement policy is currently disabled. Game mode is forced always on.\n".utf8),
+                standardError: Data()
+            )
+        }
+        return CommandResult(exitCode: 0, standardOutput: Data(), standardError: Data())
+    }
+}
+
+@Test func gameModeServiceResolvesToolAndSetsPolicy() async throws {
+    let runner = GameModeCommandRunner()
+    let service = GameModeService(runner: runner)
+
+    #expect(try await service.status() == GameModeStatus(policy: .on, isEnabled: true))
+    try await service.setPolicy(.automatic)
+
+    let calls = await runner.calls
+    #expect(calls.count == 3)
+    #expect(calls[0].0 == "/usr/bin/xcrun")
+    #expect(calls[0].1 == ["--find", "gamepolicyctl"])
+    #expect(calls[1].0 == "/Applications/Xcode.app/Contents/Developer/usr/bin/gamepolicyctl")
+    #expect(calls[1].1 == ["game-mode", "status"])
+    #expect(calls[2].0 == "/Applications/Xcode.app/Contents/Developer/usr/bin/gamepolicyctl")
+    #expect(calls[2].1 == ["game-mode", "set", "auto"])
+}
+
+@Test func gameModeStatusParserAcceptsAutomaticAndOff() throws {
+    let automatic = try GameModeService.parseStatus("Game mode is off. Game mode enablement policy is automatic.")
+    #expect(automatic == GameModeStatus(policy: .automatic, isEnabled: false))
+
+    let forcedOff = try GameModeService.parseStatus("Game mode is off. Game mode is forced always off.")
+    #expect(forcedOff == GameModeStatus(policy: .off, isEnabled: false))
+}
+
 @Test func perAppMetalHUDLaunchUsesScopedEnvironment() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let application = root.appendingPathComponent("Example Game.app", isDirectory: true)

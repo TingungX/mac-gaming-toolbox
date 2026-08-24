@@ -15,6 +15,7 @@ enum AppCompositionRoot {
         let configurationStore = ConfigurationStore()
         let diskService = DiskService()
         let gamingService = GamingService(privileged: privileged)
+        let gameModeService = GameModeService()
         let hostnameService = HostnameService(privileged: privileged)
         let cacheService = CacheService(privileged: privileged)
         let application = ToolboxApplicationService(
@@ -22,6 +23,7 @@ enum AppCompositionRoot {
             configurationStore: configurationStore,
             diskService: diskService,
             gamingService: gamingService,
+            gameModeService: gameModeService,
             hostnameService: hostnameService,
             cacheService: cacheService
         )

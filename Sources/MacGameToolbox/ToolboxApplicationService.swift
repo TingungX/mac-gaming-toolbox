@@ -11,6 +11,8 @@ protocol ToolboxApplicationCoordinating: Sendable {
     func saveConfiguration(_ configuration: AppConfiguration) async throws
     func metalHUDEnabled() async -> Bool
     func setMetalHUD(enabled: Bool) async throws
+    func gameModeStatus() async throws -> GameModeStatus
+    func setGameModePolicy(_ policy: GameModePolicy) async throws
     func launchWithMetalHUD(applicationPath: String) async throws
     func cleanLegacyHoYoStateIfNeeded() async throws
     func prioritizeCrossOverProcesses() async throws -> Int
@@ -36,6 +38,7 @@ actor ToolboxApplicationService: ToolboxApplicationCoordinating {
     private let configurationStore: ConfigurationStore
     private let diskService: DiskService
     private let gamingService: GamingService
+    private let gameModeService: GameModeService
     private let hostnameService: HostnameService
     private let cacheService: CacheService
     private let wallpaperService: WallpaperService
@@ -45,6 +48,7 @@ actor ToolboxApplicationService: ToolboxApplicationCoordinating {
         configurationStore: ConfigurationStore,
         diskService: DiskService,
         gamingService: GamingService,
+        gameModeService: GameModeService,
         hostnameService: HostnameService,
         cacheService: CacheService
     ) {
@@ -52,6 +56,7 @@ actor ToolboxApplicationService: ToolboxApplicationCoordinating {
         self.configurationStore = configurationStore
         self.diskService = diskService
         self.gamingService = gamingService
+        self.gameModeService = gameModeService
         self.hostnameService = hostnameService
         self.cacheService = cacheService
         self.wallpaperService = WallpaperService()
@@ -71,6 +76,14 @@ actor ToolboxApplicationService: ToolboxApplicationCoordinating {
 
     func setMetalHUD(enabled: Bool) async throws {
         try await gamingService.setMetalHUD(enabled: enabled)
+    }
+
+    func gameModeStatus() async throws -> GameModeStatus {
+        try await gameModeService.status()
+    }
+
+    func setGameModePolicy(_ policy: GameModePolicy) async throws {
+        try await gameModeService.setPolicy(policy)
     }
 
     func launchWithMetalHUD(applicationPath: String) async throws {

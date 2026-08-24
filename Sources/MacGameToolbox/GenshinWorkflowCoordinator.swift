@@ -19,6 +19,13 @@ struct GenshinWorkflowUpdate: Sendable {
     let progress: Double
 }
 
+struct GenshinWorkflowStepPreview: Identifiable, Hashable, Sendable {
+    let id: String
+    let title: String
+    let detail: String
+    let icon: String
+}
+
 protocol GenshinWorkflowCoordinating: Sendable {
     func run(
         installation: GameInstallation,
@@ -34,6 +41,15 @@ protocol GenshinWorkflowCoordinating: Sendable {
 actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
     static let workflowID = "game.hoyo.genshin.cn.launch"
     static let installationID = "game.hoyo.genshin.cn"
+    static let stepPreviews: [GenshinWorkflowStepPreview] = [
+        GenshinWorkflowStepPreview(id: "preflight", title: tr("环境预检", "Environment preflight"), detail: tr("检查 CrossOver 与已绑定的游戏配置", "Check CrossOver and the bound game configuration"), icon: "checkmark.shield"),
+        GenshinWorkflowStepPreview(id: "isolate-network", title: tr("隔离网络", "Isolate network"), detail: tr("短时阻断全机网络，避免启动阶段失败", "Temporarily block global network access during startup"), icon: "network.slash"),
+        GenshinWorkflowStepPreview(id: "configure-metalhud", title: tr("配置 MetalHUD", "Configure MetalHUD"), detail: tr("按当前偏好准备性能监视器", "Prepare the performance monitor when enabled"), icon: "gauge.with.dots.needle.67percent"),
+        GenshinWorkflowStepPreview(id: "launch-game", title: tr("启动游戏", "Launch game"), detail: tr("通过已验证的 CrossOver 启动适配器启动", "Launch through the verified CrossOver adapter"), icon: "play.fill"),
+        GenshinWorkflowStepPreview(id: "await-rendering", title: tr("等待渲染就绪", "Wait for rendering"), detail: tr("检测受限的渲染信号，不使用固定倒计时", "Wait for the bounded rendering signal instead of a fixed delay"), icon: "eye"),
+        GenshinWorkflowStepPreview(id: "restore-network", title: tr("恢复网络", "Restore network"), detail: tr("通过同一恢复句柄恢复网络连通性", "Restore connectivity through the same recovery handle"), icon: "network"),
+        GenshinWorkflowStepPreview(id: "apply-qos", title: tr("优化进程", "Optimize processes"), detail: tr("提升已识别的游戏进程优先级", "Boost the identified game process tree"), icon: "bolt.fill")
+    ]
 
     private enum StepKind {
         static let preflight = "environment.preflight"

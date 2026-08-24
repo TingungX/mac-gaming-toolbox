@@ -10,6 +10,80 @@ public enum PrivilegedOperation: Sendable, Equatable {
     case createDirectory(String)
 }
 
+public enum GameModePolicy: String, Codable, Equatable, Sendable {
+    case automatic = "auto"
+    case on
+    case off
+}
+
+public struct GameModeStatus: Equatable, Sendable {
+    public let policy: GameModePolicy
+    public let isEnabled: Bool
+
+    public init(policy: GameModePolicy, isEnabled: Bool) {
+        self.policy = policy
+        self.isEnabled = isEnabled
+    }
+}
+
+/// Controls the system Game Mode policy through Apple's gamepolicyctl tool.
+/// The tool is resolved through xcrun so the app never embeds an Xcode path.
+public actor GameModeService {
+    private let runner: any CommandRunning
+    private var executablePath: String?
+
+    public init(runner: any CommandRunning = ProcessCommandRunner()) {
+        self.runner = runner
+    }
+
+    public func status() async throws -> GameModeStatus {
+        let result = try await runner.run(try await executable(), arguments: ["game-mode", "status"])
+        return try Self.parseStatus(result.outputString)
+    }
+
+    public func setPolicy(_ policy: GameModePolicy) async throws {
+        _ = try await runner.run(try await executable(), arguments: ["game-mode", "set", policy.rawValue])
+    }
+
+    public static func parseStatus(_ output: String) throws -> GameModeStatus {
+        let normalized = output
+            .replacingOccurrences(of: #"\u001B\[[;\d]*m"#, with: "", options: .regularExpression)
+            .lowercased()
+
+        let policy: GameModePolicy
+        if normalized.contains("forced always on") {
+            policy = .on
+        } else if normalized.contains("forced always off") {
+            policy = .off
+        } else if normalized.contains("automatic") || normalized.contains("automatically") {
+            policy = .automatic
+        } else {
+            throw ToolboxError.malformedOutput("Unable to determine Game Mode policy")
+        }
+
+        let isEnabled: Bool
+        if normalized.contains("game mode is on") {
+            isEnabled = true
+        } else if normalized.contains("game mode is off") {
+            isEnabled = false
+        } else {
+            throw ToolboxError.malformedOutput("Unable to determine Game Mode state")
+        }
+        return GameModeStatus(policy: policy, isEnabled: isEnabled)
+    }
+
+    private func executable() async throws -> String {
+        if let executablePath { return executablePath }
+        let result = try await runner.run("/usr/bin/xcrun", arguments: ["--find", "gamepolicyctl"])
+        let path = result.outputString
+        guard path.hasPrefix("/"), URL(fileURLWithPath: path).lastPathComponent == "gamepolicyctl" else {
+            throw ToolboxError.malformedOutput("xcrun returned an invalid gamepolicyctl path")
+        }
+        executablePath = path
+        return path
+    }
+}
+
 public protocol PrivilegedOperating: Sendable {
     func perform(_ operation: PrivilegedOperation) async throws
 }

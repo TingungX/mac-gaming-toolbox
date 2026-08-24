@@ -38,6 +38,11 @@ struct MacGameToolboxApp: App {
                 Button(tr("教程总导航", "Tutorials")) { MenuCommandCoordinator.shared.showTutorials() }
             }
         }
+
+        Settings {
+            SettingsView()
+                .environmentObject(model)
+        }
     }
 }
 
@@ -171,5 +176,8 @@ final class MenuCommandCoordinator: NSObject {
 
     func exportDiagnostics() { model?.requestDiagnosticsExport() }
     func repairCoreFeatures() { model?.repairCoreFeatures() }
-    func showTutorials() { model?.showingTutorials = true }
+    func showTutorials() {
+        model?.showingTutorials = true
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
 }

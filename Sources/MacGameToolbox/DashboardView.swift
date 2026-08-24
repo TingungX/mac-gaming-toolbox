@@ -4,11 +4,18 @@ import MacGameToolboxCore
 import AppKit
 import SwiftUI
 
+private enum DashboardTab: Hashable {
+    case launchPrograms
+    case modules
+}
+
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var nativeGlassEnabled = NSApp.isActive
     @State private var showingMetalHUDApps = false
+    @State private var selectedTab: DashboardTab = .launchPrograms
+    @State private var expandedWorkflowIDs = Set<String>()
 
     private let columns = [GridItem(.adaptive(minimum: 280), spacing: 18)]
     private var hasCustomWallpaper: Bool { model.configuration.customWallpaperPath != nil }
@@ -18,15 +25,51 @@ struct DashboardView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             background
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    LazyVGrid(columns: columns, spacing: 18) {
-                        featureCards
+            VStack(spacing: 0) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(tr("Mac游戏工具箱", "Mac Game Toolbox"))
+                            .font(.title2.bold())
+                        Text(selectedTab == .launchPrograms
+                             ? tr("选择一条工作流，开始游戏", "Choose a workflow and start playing")
+                             : tr("按需使用独立功能模块", "Use independent tools when you need them"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    SettingsLink {
+                        Label(tr("设置", "Settings"), systemImage: "gearshape")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help(tr("设置", "Settings"))
                 }
                 .padding(.horizontal, 28)
-                .padding(.top, 28)
-                .padding(.bottom, model.status.phase == .idle ? 28 : 86)
+                .padding(.top, 22)
+                .padding(.bottom, 12)
+
+                TabView(selection: $selectedTab) {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 18) {
+                            launchProgramCards
+                        }
+                        .padding(.horizontal, 28)
+                        .padding(.top, 16)
+                        .padding(.bottom, model.status.phase == .idle ? 28 : 86)
+                    }
+                    .tabItem { Label(tr("启动程序", "Launch Programs"), systemImage: "play.rectangle.fill") }
+                    .tag(DashboardTab.launchPrograms)
+
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 18) {
+                            moduleCards
+                        }
+                        .padding(.horizontal, 28)
+                        .padding(.top, 16)
+                        .padding(.bottom, model.status.phase == .idle ? 28 : 86)
+                    }
+                    .tabItem { Label(tr("功能模块", "Feature Modules"), systemImage: "square.grid.2x2.fill") }
+                    .tag(DashboardTab.modules)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             statusPanel
@@ -35,8 +78,6 @@ struct DashboardView: View {
         }
         .background(WindowAppearanceConfigurator(nativeGlassEnabled: $nativeGlassEnabled, colorScheme: effectiveColorScheme, isEnabled: useLiquidGlassUI))
         .sheet(isPresented: $model.showingDiskManager) { DiskManagerView().environmentObject(model) }
-        .sheet(isPresented: $model.showingChangelog) { ChangelogView() }
-        .sheet(isPresented: $model.showingTutorials) { TutorialsView() }
         .sheet(isPresented: $model.showingProcessSelection) { ProcessSelectionView().environmentObject(model) }
         .sheet(isPresented: $model.showingGenshinConfiguration) {
             GenshinConfigurationView().environmentObject(model)
@@ -107,7 +148,68 @@ struct DashboardView: View {
         }
     }
 
-    @ViewBuilder private var featureCards: some View {
+    @ViewBuilder private var launchProgramCards: some View {
+        FeatureCard(icon: "gamecontroller.fill", title: tr("原神一键启动", "Genshin One-click Launch"), subtitle: tr("短时隔离网络，自动启动原神；检测到渲染线程后立即恢复网络并优化进程", "Briefly isolates the network, launches Genshin, restores connectivity at rendering start, and optimizes the process")) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .bottom) {
+                    Button(tr("启动原神", "Launch Genshin")) { model.startGenshinWorkflow() }
+                        .liquidGlassButton(prominent: true)
+                        .disabled(model.isGenshinWorkflowRunning)
+                    Spacer()
+                    Button(model.genshinInstallation == nil ? tr("首次配置", "Set up") : tr("配置", "Configure")) {
+                        model.showingGenshinConfiguration = true
+                    }
+                }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if expandedWorkflowIDs.contains(GenshinWorkflowCoordinator.workflowID) {
+                            expandedWorkflowIDs.remove(GenshinWorkflowCoordinator.workflowID)
+                        } else {
+                            expandedWorkflowIDs.insert(GenshinWorkflowCoordinator.workflowID)
+                        }
+                    }
+                } label: {
+                    Label(
+                        expandedWorkflowIDs.contains(GenshinWorkflowCoordinator.workflowID)
+                            ? tr("收起工作流预览", "Hide workflow preview")
+                            : tr("预览工作流", "Preview workflow"),
+                        systemImage: expandedWorkflowIDs.contains(GenshinWorkflowCoordinator.workflowID)
+                            ? "chevron.up"
+                            : "chevron.down"
+                    )
+                    .font(.subheadline.weight(.medium))
+                }
+                .buttonStyle(.plain)
+
+                if expandedWorkflowIDs.contains(GenshinWorkflowCoordinator.workflowID) {
+                    WorkflowPreview(steps: GenshinWorkflowCoordinator.stepPreviews)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var moduleCards: some View {
+        FeatureCard(icon: "gamecontroller.fill", title: tr("Game Mode", "Game Mode"), subtitle: tr("全局开启 macOS Game Mode，并提升已识别的 CrossOver/Wine 进程优先级", "Force macOS Game Mode on globally and boost detected CrossOver/Wine processes")) {
+            HStack(alignment: .bottom) {
+                if model.gameModeAvailable {
+                    Button(model.gameModeEnabled
+                           ? tr("关闭并恢复自动", "Disable and restore auto")
+                           : tr("开启 Game Mode", "Enable Game Mode")) {
+                        model.toggleGameMode()
+                    }
+                    .liquidGlassButton(prominent: !model.gameModeEnabled)
+                } else {
+                    Label(tr("当前系统不可用", "Unavailable on this system"), systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if model.gameModeAvailable {
+                    Text(model.gameModeEnabled ? tr("已开启", "On") : tr("自动", "Auto"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
         FeatureCard(icon: "gauge.with.dots.needle.67percent", title: tr("MetalHUD性能监视器", "MetalHUD Performance Monitor"), subtitle: tr("开发者工具，可以查看游戏帧率等信息，也可以帮助你找到游戏异常的原因", "A developer tool for viewing game frame rates and diagnosing game issues")) {
             HStack {
                 Toggle(tr("全局启用", "Enable globally"), isOn: Binding(get: { model.metalHUDEnabled }, set: { value in model.setMetalHUD(value) })).toggleStyle(.switch)
@@ -121,17 +223,6 @@ struct DashboardView: View {
                 }
                 .popover(isPresented: $showingMetalHUDApps, arrowEdge: .bottom) {
                     MetalHUDAppMenu(isPresented: $showingMetalHUDApps).environmentObject(model)
-                }
-            }
-        }
-        FeatureCard(icon: "gamecontroller.fill", title: tr("原神一键启动", "Genshin One-click Launch"), subtitle: tr("短时隔离网络，自动启动原神；检测到渲染线程后立即恢复网络并优化进程", "Briefly isolates the network, launches Genshin, restores connectivity at rendering start, and optimizes the process")) {
-            HStack(alignment: .bottom) {
-                Button(tr("启动原神", "Launch Genshin")) { model.startGenshinWorkflow() }
-                    .liquidGlassButton(prominent: true)
-                    .disabled(model.isGenshinWorkflowRunning)
-                Spacer()
-                Button(model.genshinInstallation == nil ? tr("首次配置", "Set up") : tr("配置", "Configure")) {
-                    model.showingGenshinConfiguration = true
                 }
             }
         }
@@ -160,24 +251,6 @@ struct DashboardView: View {
         }
         FeatureCard(icon: "rectangle.2.swap", title: tr("切换到SteamDeck模式", "Switch to SteamDeck Mode"), subtitle: tr("部分游戏反作弊只给SteamDeck后门，伪装成SteamDeck让Mac也能玩", "Some anti-cheat systems allow SteamDeck; impersonating one may let the game run on Mac")) {
             Button(tr("切换模式", "Toggle mode")) { model.toggleSteamDeck() }
-        }
-        FeatureCard(icon: "photo.fill.on.rectangle.fill", title: tr("导入壁纸", "Import Wallpaper"), subtitle: tr("自定义工具箱背景，图片会按比例填充整个界面", "Customize the toolbox background; images fill the window without stretching")) {
-            HStack {
-                Button(model.configuration.customWallpaperPath == nil ? tr("导入壁纸", "Import wallpaper") : tr("重新导入", "Import again")) {
-                    model.importWallpaper()
-                }
-                if model.configuration.customWallpaperPath != nil {
-                    Button(tr("恢复默认", "Reset")) {
-                        model.resetWallpaper()
-                    }
-                }
-            }
-        }
-        FeatureCard(icon: "book.pages.fill", title: tr("教程总导航", "Tutorial Hub"), subtitle: tr("Mac 游戏与 CrossOver 教程", "Mac gaming and CrossOver tutorials")) {
-            Button(tr("打开导航", "Open hub")) { model.showingTutorials = true }
-        }
-        FeatureCard(icon: "clock.arrow.circlepath", title: tr("更新日志", "Changelog"), subtitle: tr("查看版本变化", "Review version changes")) {
-            Button(tr("查看", "View")) { model.showingChangelog = true }
         }
     }
 
@@ -394,6 +467,38 @@ private struct FeatureCard<Content: View>: View {
         }
         .padding(18).frame(minHeight: 180)
         .liquidGlassCard(cornerRadius: 18, colorScheme: colorScheme, usesLiquidGlassUI: usesLiquidGlassUI, nativeGlassEnabled: nativeGlassEnabled)
+    }
+}
+
+private struct WorkflowPreview: View {
+    let steps: [GenshinWorkflowStepPreview]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(tr("工作流步骤", "Workflow steps"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                HStack(alignment: .top, spacing: 10) {
+                    Text("\(index + 1)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, alignment: .trailing)
+                    Image(systemName: step.icon)
+                        .frame(width: 18)
+                        .foregroundStyle(.purple)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(step.title).font(.subheadline.weight(.medium))
+                        Text(step.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
+        }
+        .padding(.top, 2)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }
 
