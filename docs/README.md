@@ -11,6 +11,7 @@
 
 - [ADR-0001：外部可编辑、能力受限的工作流配方](decisions/0001-capability-bounded-external-recipes.md)
 - [ADR-0002：单一特权 helper 与双能力注册表](decisions/0002-single-helper-dual-capability-registries.md)
+- [ADR-0003：使用临时 PF anchor 实现全局网络隔离](decisions/0003-ephemeral-pf-network-isolation.md)
 
 ## 诊断证据
 

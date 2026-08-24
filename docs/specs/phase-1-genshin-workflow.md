@@ -5,7 +5,7 @@ Owner: TingungX
 Last updated: 2026-08-24  
 Scope: 原神、CrossOver、短时网络隔离、自动恢复、工作流基础设施  
 Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/GamingServices.swift`, `Sources/MacGameToolboxCore/HostsFileEditor.swift`, `Sources/MacGameToolboxCore/NetworkProxyBypass.swift`, `Sources/MacGameToolboxPrivilegedHelper/main.swift`  
-Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../evidence/2026-08-24-genshin-crossover-launch.md`
+Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../decisions/0003-ephemeral-pf-network-isolation.md`, `../evidence/2026-08-24-genshin-crossover-launch.md`
 
 ## 问题
 
@@ -18,6 +18,7 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 第一款验收游戏为原神。
 - 成功基线为“先断网，再启动游戏”。
 - 网络方案采用“先稳后精”：先把已验证的全局网络闸门自动化并保证恢复，同时采集证据；后续再判断能否定向隔离。
+- 第一阶段全局网络闸门采用 ADR-0003 的临时 PF anchor；不修改主 ruleset，不通过逐项关闭网络服务模拟全局隔离。
 - 第一版 readiness 采用保守的渲染起点：只在当前 `YuanShen.exe` PID 出现 `UnityGfxDeviceWorker` 线程后恢复网络；用户实测约 3 秒可用只作为后续优化数据，不作为成功条件。
 - 游戏流程由外部可编辑、能力受限的 Recipe 描述。
 - App 侧使用不可变 `WorkflowStepRegistry`，helper 侧使用不可变 `PrivilegedCapabilityRegistry`；两边只共享稳定 `CapabilityContract`。
@@ -101,23 +102,11 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 
 成功样本在启动后约 9.9 秒出现 `UnityGfxDeviceWorker`。该事件晚于已观察到的失败分叉，且语义上对应 Unity render thread，因此确定为 `genshin.renderingStarted.v1` 的首个候选正向信号。完整时间线、证据边界和复测条件见[配对日志分析](../evidence/2026-08-24-genshin-crossover-launch.md)。在复测完成前它仍是候选，不把单个配对样本写成跨版本稳定结论。
 
-## 网络闸门候选实现
+## 网络闸门实现
 
-所有候选都必须位于统一 `NetworkIsolationOperating` 抽象之后，Recipe 不感知具体机制。
+根据本机同时存在物理接口与多个 VPN/TUN、默认路由经过 `utun` 的事实，第一阶段选择独立 PF 子 anchor。具体规则、enable reference、既有 state 清理、root journal 和租约恢复语义由 [ADR-0003](../decisions/0003-ephemeral-pf-network-isolation.md) 固化。
 
-### 独立 PF anchor
-
-优点是可以原子加载/移除规则且不主动断开 Wi-Fi 关联；需要验证与 macOS 系统 PF、VPN/TUN 和现有第三方规则的共存，以及 App/helper 崩溃后的清理行为。
-
-### 网络服务状态快照与禁用
-
-使用系统网络服务控制，行为直观；但多网卡、VPN/Tailscale、重新关联延迟和重启后残留风险更高，恢复验证更复杂。
-
-### Network Extension
-
-具备长期实现按 App/flow 控制的潜力，但需要额外 entitlement、签名和分发设计。除非前两种无法满足验收标准，否则不进入第一阶段。
-
-最终选择必须通过单独 ADR 记录，不能直接藏在实现 commit 中。
+`NetworkIsolationOperating` 和 Recipe 仍不感知具体机制。PF preflight 不通过时明确报告当前系统不兼容；不得自动改写 `/etc/pf.conf`，也不得静默降级为 hosts 或固定倒计时。
 
 ## Recipe 第一版草案
 
@@ -154,7 +143,7 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 - 建立可重复的三组启动记录。
 - 复测 `genshin.renderingStarted.v1` readiness 候选信号。
 - 为当前 `PrivilegedRequest`、helper 分发和 HoYo 流程补齐 characterization tests。
-- 用证据选择全局网络闸门实现并新增 ADR；结构解耦不得预设这一结论。
+- 为 ADR-0003 的 PF handler 建立规则隔离、enable token、租约和崩溃恢复测试；结构解耦不得把 PF 细节泄漏到引擎。
 
 退出条件：至少一条成功断网运行和对应失败对照具有完整、可比较的时间线；候选 probe 在连续三次成功与三次失败对照中无误报，并验证在 probe 后恢复网络仍可继续进入游戏。
 
@@ -241,5 +230,4 @@ Related docs: `../design/workflow-runtime.md`, `../decisions/0001-capability-bou
 
 - `genshin.renderingStarted.v1` 能否在连续复测、游戏更新和计划支持的 CrossOver 图形后端中稳定出现，且恢复网络后不再回到失败路径？
 - 首个验收环境使用哪个 CrossOver 版本、bottle 和原神渠道？
-- 全局网络闸门采用哪个候选实现？
 - 第一版 Recipe 的字段、大小、步骤数量和 timeout 上限是多少？

@@ -5,7 +5,7 @@ Owner: TingungX
 Last updated: 2026-08-24  
 Scope: 外部游戏配方、工作流执行、状态恢复、特权能力调用  
 Related code: `Sources/MacGameToolbox/AppModel.swift`, `Sources/MacGameToolboxCore/`, `Sources/MacGameToolboxPrivilegedHelper/`  
-Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../specs/phase-1-genshin-workflow.md`
+Related docs: `../decisions/0001-capability-bounded-external-recipes.md`, `../decisions/0002-single-helper-dual-capability-registries.md`, `../decisions/0003-ephemeral-pf-network-isolation.md`, `../specs/phase-1-genshin-workflow.md`
 
 ## 背景与问题
 
@@ -212,7 +212,7 @@ App/helper unexpected exit
 - App 下次启动主动查询并恢复任何 stale run。
 - 应用隔离和恢复后都进行独立连通性验证。
 
-具体使用 PF anchor、网络服务快照或其他实现，由原神实测后的单独 ADR 决定；Recipe 只看到稳定的 `networkIsolation` capability。
+第一阶段按 ADR-0003 使用 helper 管理的临时 PF 子 anchor。handler 只加载和清理项目自己的 anchor，使用 PF enable reference token 与 root journal 实现租约恢复，并在隔离规则生效后清理既有 PF states。Recipe 只看到稳定的 `networkIsolation` capability，不能提供 anchor、规则或 PF 参数。
 
 ## 配方信任与权限呈现
 
@@ -265,5 +265,4 @@ App/helper unexpected exit
 
 - 第一版 Recipe schema 的最终字段和大小上限。
 - 原神“反作弊已通过”的可自动验证信号。
-- 全局网络隔离的具体系统实现。
 - CrossOver 启动适配器需要支持的最低版本和 bottle 发现方式。
