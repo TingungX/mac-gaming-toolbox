@@ -83,6 +83,24 @@ public enum BottleProcessSession {
         return processes.filter { pids.contains($0.pid) }
     }
 
+    /// Wine/cxstart processes owned by this bottle. CrossOver.app itself is
+    /// excluded. The helper accepts at most 64 PIDs per renice request.
+    public static func boostablePIDs(
+        _ processes: [SystemProcess],
+        bottle: String,
+        additionallyClaimed: Set<Int32> = [],
+        limit: Int = 64
+    ) -> [Int32] {
+        let pids = scopedProcesses(
+            processes,
+            bottle: bottle,
+            additionallyClaimed: additionallyClaimed
+        )
+        .filter(isTerminatable)
+        .map(\.pid)
+        return Array(Set(pids)).sorted().prefix(limit).map { $0 }
+    }
+
     public static func gameStillRunning(
         _ processes: [SystemProcess],
         bottle: String,

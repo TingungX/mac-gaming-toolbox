@@ -138,6 +138,7 @@ actor AdjustableGameModeRunner: CommandRunning {
             gameProcessNames: ["YuanShen.exe"]
         )
     )
+    #expect(BottleProcessSession.boostablePIDs(processes, bottle: genshin) == [20, 30, 40])
 }
 
 private final class RecordingProcessSignaler: ProcessSignaling, @unchecked Sendable {

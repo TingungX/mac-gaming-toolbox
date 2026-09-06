@@ -54,6 +54,11 @@
 		A1000000000000000000002D /* WorkflowExclusiveLocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000016 /* WorkflowExclusiveLocks.swift */; };
 		A1000000000000000000002E /* GameModeClaimLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000017 /* GameModeClaimLedger.swift */; };
 		A1000000000000000000002F /* BottleProcessSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000018 /* BottleProcessSession.swift */; };
+		A10000000000000000000030 /* BuiltInGameWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000019 /* BuiltInGameWorkflow.swift */; };
+		A10000000000000000000031 /* CrossOverGamePathDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000001A /* CrossOverGamePathDiscovery.swift */; };
+		A10000000000000000000032 /* DirectLaunchWorkflowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2000000000000000000000F /* DirectLaunchWorkflowCoordinator.swift */; };
+		A10000000000000000000033 /* CrossOverGameConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000010 /* CrossOverGameConfigurationView.swift */; };
+		A10000000000000000000034 /* WorkflowPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000011 /* WorkflowPresentation.swift */; };
 		B10000000000000000000001 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* Models.swift */; };
 		B10000000000000000000002 /* CommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* CommandRunner.swift */; };
 		B10000000000000000000003 /* ConfigurationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* ConfigurationStore.swift */; };
@@ -89,6 +94,8 @@
 		B10000000000000000000021 /* WorkflowExclusiveLocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000016 /* WorkflowExclusiveLocks.swift */; };
 		B10000000000000000000022 /* GameModeClaimLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000017 /* GameModeClaimLedger.swift */; };
 		B10000000000000000000023 /* BottleProcessSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000018 /* BottleProcessSession.swift */; };
+		B10000000000000000000024 /* BuiltInGameWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000019 /* BuiltInGameWorkflow.swift */; };
+		B10000000000000000000025 /* CrossOverGamePathDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000001A /* CrossOverGamePathDiscovery.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -156,6 +163,8 @@
 		F10000000000000000000016 /* WorkflowExclusiveLocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowExclusiveLocks.swift; sourceTree = "<group>"; };
 		F10000000000000000000017 /* GameModeClaimLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameModeClaimLedger.swift; sourceTree = "<group>"; };
 		F10000000000000000000018 /* BottleProcessSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BottleProcessSession.swift; sourceTree = "<group>"; };
+		F10000000000000000000019 /* BuiltInGameWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuiltInGameWorkflow.swift; sourceTree = "<group>"; };
+		F1000000000000000000001A /* CrossOverGamePathDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossOverGamePathDiscovery.swift; sourceTree = "<group>"; };
 		F20000000000000000000001 /* MacGameToolboxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacGameToolboxApp.swift; sourceTree = "<group>"; };
 		F20000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		F20000000000000000000003 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -170,6 +179,9 @@
 		F2000000000000000000000C /* GenshinConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenshinConfigurationView.swift; sourceTree = "<group>"; };
 		F2000000000000000000000D /* GenshinWorkflowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenshinWorkflowCoordinator.swift; sourceTree = "<group>"; };
 		F2000000000000000000000E /* ToolboxApplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxApplicationService.swift; sourceTree = "<group>"; };
+		F2000000000000000000000F /* DirectLaunchWorkflowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectLaunchWorkflowCoordinator.swift; sourceTree = "<group>"; };
+		F20000000000000000000010 /* CrossOverGameConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossOverGameConfigurationView.swift; sourceTree = "<group>"; };
+		F20000000000000000000011 /* WorkflowPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowPresentation.swift; sourceTree = "<group>"; };
 		F30000000000000000000001 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		F30000000000000000000002 /* com.iven.macgametoolbox.helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = com.iven.macgametoolbox.helper.plist; sourceTree = "<group>"; };
 		F30000000000000000000003 /* App-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "App-Info.plist"; sourceTree = "<group>"; };
@@ -262,6 +274,8 @@
 				F10000000000000000000016 /* WorkflowExclusiveLocks.swift */,
 				F10000000000000000000017 /* GameModeClaimLedger.swift */,
 				F10000000000000000000018 /* BottleProcessSession.swift */,
+				F10000000000000000000019 /* BuiltInGameWorkflow.swift */,
+				F1000000000000000000001A /* CrossOverGamePathDiscovery.swift */,
 			);
 			name = MacGameToolboxCore;
 			path = Sources/MacGameToolboxCore;
@@ -284,6 +298,9 @@
 				F2000000000000000000000C /* GenshinConfigurationView.swift */,
 				F2000000000000000000000D /* GenshinWorkflowCoordinator.swift */,
 				F2000000000000000000000E /* ToolboxApplicationService.swift */,
+				F2000000000000000000000F /* DirectLaunchWorkflowCoordinator.swift */,
+				F20000000000000000000010 /* CrossOverGameConfigurationView.swift */,
+				F20000000000000000000011 /* WorkflowPresentation.swift */,
 			);
 			name = MacGameToolbox;
 			path = Sources/MacGameToolbox;
@@ -455,6 +472,8 @@
 				A1000000000000000000002D /* WorkflowExclusiveLocks.swift in Sources */,
 				A1000000000000000000002E /* GameModeClaimLedger.swift in Sources */,
 				A1000000000000000000002F /* BottleProcessSession.swift in Sources */,
+				A10000000000000000000030 /* BuiltInGameWorkflow.swift in Sources */,
+				A10000000000000000000031 /* CrossOverGamePathDiscovery.swift in Sources */,
 				A10000000000000000000009 /* MacGameToolboxApp.swift in Sources */,
 				A1000000000000000000000A /* AppModel.swift in Sources */,
 				A1000000000000000000000B /* DashboardView.swift in Sources */,
@@ -468,6 +487,9 @@
 				A1000000000000000000002A /* GenshinConfigurationView.swift in Sources */,
 				A1000000000000000000002B /* GenshinWorkflowCoordinator.swift in Sources */,
 				A1000000000000000000002C /* ToolboxApplicationService.swift in Sources */,
+				A10000000000000000000032 /* DirectLaunchWorkflowCoordinator.swift in Sources */,
+				A10000000000000000000033 /* CrossOverGameConfigurationView.swift in Sources */,
+				A10000000000000000000034 /* WorkflowPresentation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -499,6 +521,8 @@
 				B10000000000000000000021 /* WorkflowExclusiveLocks.swift in Sources */,
 				B10000000000000000000022 /* GameModeClaimLedger.swift in Sources */,
 				B10000000000000000000023 /* BottleProcessSession.swift in Sources */,
+				B10000000000000000000024 /* BuiltInGameWorkflow.swift in Sources */,
+				B10000000000000000000025 /* CrossOverGamePathDiscovery.swift in Sources */,
 				B10000000000000000000018 /* CommandExecution.swift in Sources */,
 				B10000000000000000000019 /* Registry.swift in Sources */,
 				B1000000000000000000001A /* HealthCheckCapabilityHandler.swift in Sources */,

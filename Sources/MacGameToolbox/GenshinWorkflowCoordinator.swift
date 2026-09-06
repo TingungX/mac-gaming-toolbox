@@ -29,13 +29,6 @@ struct GenshinWorkflowUpdate: Sendable {
     let progress: Double
 }
 
-struct GenshinWorkflowStepPreview: Identifiable, Hashable, Sendable {
-    let id: String
-    let title: String
-    let detail: String
-    let icon: String
-}
-
 protocol GenshinWorkflowCoordinating: Sendable {
     func exclusiveConflicts(for installation: GameInstallation) async -> [WorkflowResourceConflict]
     func gameModeHolderCount() async -> Int
@@ -60,19 +53,19 @@ protocol GenshinWorkflowCoordinating: Sendable {
 actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
     static let workflowID = "game.hoyo.genshin.cn.launch"
     static let installationID = "game.hoyo.genshin.cn"
-    static let stepPreviews: [GenshinWorkflowStepPreview] = [
-        GenshinWorkflowStepPreview(id: "preflight", title: tr("环境预检", "Environment preflight"), detail: tr("检查 CrossOver 与已绑定的游戏配置", "Check CrossOver and the bound game configuration"), icon: "checkmark.shield"),
-        GenshinWorkflowStepPreview(id: "claim-process-session", title: tr("占用容器", "Claim bottle"), detail: tr("以本机安装绑定为锁，独占这个 CrossOver 容器", "Exclusively claim this CrossOver bottle from the local installation binding"), icon: "lock.fill"),
-        GenshinWorkflowStepPreview(id: "isolate-network", title: tr("隔离网络", "Isolate network"), detail: tr("短时阻断全机网络，避免启动阶段失败", "Temporarily block global network access during startup"), icon: "network.slash"),
-        GenshinWorkflowStepPreview(id: "configure-metalhud", title: tr("配置 MetalHUD", "Configure MetalHUD"), detail: tr("按当前偏好准备性能监视器", "Prepare the performance monitor when enabled"), icon: "gauge.with.dots.needle.67percent"),
-        GenshinWorkflowStepPreview(id: "launch-game", title: tr("启动游戏", "Launch game"), detail: tr("通过已验证的 CrossOver 启动适配器启动", "Launch through the verified CrossOver adapter"), icon: "play.fill"),
-        GenshinWorkflowStepPreview(id: "await-rendering", title: tr("等待渲染就绪", "Wait for rendering"), detail: tr("检测受限的渲染信号，不使用固定倒计时", "Wait for the bounded rendering signal instead of a fixed delay"), icon: "eye"),
-        GenshinWorkflowStepPreview(id: "restore-network", title: tr("恢复网络", "Restore network"), detail: tr("通过同一恢复句柄恢复网络连通性", "Restore connectivity through the same recovery handle"), icon: "network"),
-        GenshinWorkflowStepPreview(id: "apply-qos", title: tr("优化进程", "Optimize processes"), detail: tr("提升已识别的游戏进程优先级", "Boost the identified game process tree"), icon: "bolt.fill"),
-        GenshinWorkflowStepPreview(id: "claim-game-mode", title: tr("占用 Game Mode", "Claim Game Mode"), detail: tr("由本 run 占用全局 Game Mode；最后释放者才恢复原策略", "This run claims global Game Mode; the last releaser restores the previous policy"), icon: "flag.checkered"),
-        GenshinWorkflowStepPreview(id: "await-exit", title: tr("跟踪至退出", "Track until exit"), detail: tr("等待本容器中的原神进程退出", "Wait until the Genshin process in this bottle exits"), icon: "eye.circle"),
-        GenshinWorkflowStepPreview(id: "terminate-residuals", title: tr("结束残留进程", "Terminate residuals"), detail: tr("只终止本 run 声称的容器进程", "Terminate only processes claimed by this run"), icon: "xmark.circle"),
-        GenshinWorkflowStepPreview(id: "release-game-mode", title: tr("交还 Game Mode", "Release Game Mode"), detail: tr("释放本 run 的 claim；无其他持有者时恢复自动策略", "Release this run's claim and restore auto when no holders remain"), icon: "flag")
+    static let stepPreviews: [WorkflowStepPreview] = [
+        WorkflowStepPreview(id: "preflight", title: tr("环境预检", "Environment preflight"), detail: tr("检查 CrossOver 与已绑定的游戏配置", "Check CrossOver and the bound game configuration"), icon: "checkmark.shield"),
+        WorkflowStepPreview(id: "claim-process-session", title: tr("占用容器", "Claim bottle"), detail: tr("以本机安装绑定为锁，独占这个 CrossOver 容器", "Exclusively claim this CrossOver bottle from the local installation binding"), icon: "lock.fill"),
+        WorkflowStepPreview(id: "isolate-network", title: tr("隔离网络", "Isolate network"), detail: tr("短时阻断全机网络，避免启动阶段失败", "Temporarily block global network access during startup"), icon: "network.slash"),
+        WorkflowStepPreview(id: "configure-metalhud", title: tr("配置 MetalHUD", "Configure MetalHUD"), detail: tr("按当前偏好准备性能监视器", "Prepare the performance monitor when enabled"), icon: "gauge.with.dots.needle.67percent"),
+        WorkflowStepPreview(id: "launch-game", title: tr("启动游戏", "Launch game"), detail: tr("通过已验证的 CrossOver 启动适配器启动", "Launch through the verified CrossOver adapter"), icon: "play.fill"),
+        WorkflowStepPreview(id: "await-rendering", title: tr("等待渲染就绪", "Wait for rendering"), detail: tr("检测受限的渲染信号，不使用固定倒计时", "Wait for the bounded rendering signal instead of a fixed delay"), icon: "eye"),
+        WorkflowStepPreview(id: "restore-network", title: tr("恢复网络", "Restore network"), detail: tr("通过同一恢复句柄恢复网络连通性", "Restore connectivity through the same recovery handle"), icon: "network"),
+        WorkflowStepPreview(id: "apply-qos", title: tr("优化进程", "Optimize processes"), detail: tr("提升已识别的游戏进程优先级", "Boost the identified game process tree"), icon: "bolt.fill"),
+        WorkflowStepPreview(id: "claim-game-mode", title: tr("占用 Game Mode", "Claim Game Mode"), detail: tr("由本 run 占用全局 Game Mode；最后释放者才恢复原策略", "This run claims global Game Mode; the last releaser restores the previous policy"), icon: "flag.checkered"),
+        WorkflowStepPreview(id: "await-exit", title: tr("跟踪至退出", "Track until exit"), detail: tr("等待本容器中的原神进程退出", "Wait until the Genshin process in this bottle exits"), icon: "eye.circle"),
+        WorkflowStepPreview(id: "terminate-residuals", title: tr("结束残留进程", "Terminate residuals"), detail: tr("只终止本 run 声称的容器进程", "Terminate only processes claimed by this run"), icon: "xmark.circle"),
+        WorkflowStepPreview(id: "release-game-mode", title: tr("交还 Game Mode", "Release Game Mode"), detail: tr("释放本 run 的 claim；无其他持有者时恢复自动策略", "Release this run's claim and restore auto when no holders remain"), icon: "flag")
     ]
 
     private enum StepKind {
@@ -269,6 +262,7 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
         let workflow = try Self.workflow(metalHUDEnabled: false)
         for runID in runIDs {
             let events = try await journal.events(for: runID)
+            guard events.first?.workflowID == Self.workflowID else { continue }
             switch WorkflowRecoveryPlanner.action(for: events, workflow: workflow) {
             case .resume:
                 resumable.append(runID)

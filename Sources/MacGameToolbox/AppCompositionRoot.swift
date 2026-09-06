@@ -6,6 +6,7 @@ import MacGameToolboxCore
 struct AppDependencies {
     let application: any ToolboxApplicationCoordinating
     let genshinWorkflow: any GenshinWorkflowCoordinating
+    let directLaunchWorkflow: any DirectLaunchWorkflowCoordinating
     let workflowInitializationError: String?
 }
 
@@ -37,13 +38,14 @@ enum AppCompositionRoot {
             .appendingPathComponent("journal.json")
         let runsDirectory = applicationSupport.appendingPathComponent("WorkflowRuns", isDirectory: true)
 
-        let workflow: any GenshinWorkflowCoordinating
+        let genshinWorkflow: any GenshinWorkflowCoordinating
+        let directLaunchWorkflow: any DirectLaunchWorkflowCoordinating
         let initializationError: String?
         do {
             let journal = try FileWorkflowJournal(url: journalURL)
             let exclusiveLocks = WorkflowExclusiveLockTable()
             let gameModeClaims = GameModeClaimLedger(service: gameModeService)
-            workflow = try GenshinWorkflowCoordinator(
+            let genshin = try GenshinWorkflowCoordinator(
                 capabilityClient: privileged,
                 privileged: privileged,
                 gamingService: gamingService,
@@ -52,16 +54,28 @@ enum AppCompositionRoot {
                 exclusiveLocks: exclusiveLocks,
                 gameModeClaims: gameModeClaims
             )
+            let direct = try DirectLaunchWorkflowCoordinator(
+                privileged: privileged,
+                gamingService: gamingService,
+                journal: journal,
+                runsDirectory: runsDirectory,
+                exclusiveLocks: exclusiveLocks,
+                gameModeClaims: gameModeClaims
+            )
+            genshinWorkflow = genshin
+            directLaunchWorkflow = direct
             initializationError = nil
         } catch {
             let message = error.localizedDescription
-            workflow = UnavailableGenshinWorkflowCoordinator(message: message)
+            genshinWorkflow = UnavailableGenshinWorkflowCoordinator(message: message)
+            directLaunchWorkflow = UnavailableDirectLaunchWorkflowCoordinator(message: message)
             initializationError = message
         }
 
         return AppDependencies(
             application: application,
-            genshinWorkflow: workflow,
+            genshinWorkflow: genshinWorkflow,
+            directLaunchWorkflow: directLaunchWorkflow,
             workflowInitializationError: initializationError
         )
     }
@@ -104,6 +118,49 @@ private actor UnavailableGenshinWorkflowCoordinator: GenshinWorkflowCoordinating
     func recoverIncompleteRuns(
         update: @escaping @Sendable (GenshinWorkflowUpdate) async -> Void
     ) async throws -> GenshinWorkflowRecovery {
+        throw ToolboxError.commandFailed(message)
+    }
+}
+
+private actor UnavailableDirectLaunchWorkflowCoordinator: DirectLaunchWorkflowCoordinating {
+    let message: String
+
+    init(message: String) {
+        self.message = message
+    }
+
+    func exclusiveConflicts(for installation: GameInstallation) async -> [WorkflowResourceConflict] {
+        []
+    }
+
+    func gameModeHolderCount() async -> Int { 0 }
+
+    func run(
+        profile: BuiltInGameWorkflow,
+        installation: GameInstallation,
+        metalHUDEnabled: Bool,
+        update: @escaping @Sendable (DirectLaunchWorkflowUpdate) async -> Void
+    ) async throws -> WorkflowRunResult {
+        throw ToolboxError.commandFailed(message)
+    }
+
+    func resume(
+        profile: BuiltInGameWorkflow,
+        runID: WorkflowRunID,
+        installation: GameInstallation,
+        metalHUDEnabled: Bool,
+        update: @escaping @Sendable (DirectLaunchWorkflowUpdate) async -> Void
+    ) async throws -> WorkflowRunResult {
+        throw ToolboxError.commandFailed(message)
+    }
+
+    func cancel() async {}
+
+    func cancel(runIDs: [WorkflowRunID]) async {}
+
+    func recoverIncompleteRuns(
+        update: @escaping @Sendable (DirectLaunchWorkflowUpdate) async -> Void
+    ) async throws -> DirectLaunchWorkflowRecovery {
         throw ToolboxError.commandFailed(message)
     }
 }

@@ -25,8 +25,11 @@ final class AppModel: ObservableObject {
     @Published var cacheConfirmationStage = 0
     @Published var showingTutorials = false
     @Published var showingGenshinConfiguration = false
+    @Published var configuringDirectLaunch: BuiltInGameWorkflow?
     @Published var isGenshinWorkflowRunning = false
     @Published var genshinWorkflowStage: GenshinWorkflowStage?
+    @Published var directLaunchWorkflowStage: DirectLaunchWorkflowStage?
+    @Published var activeWorkflowDisplayName: String?
     @Published var showingWorkflowConflict = false
     @Published var pendingWorkflowConflicts: [WorkflowResourceConflict] = []
     @Published var gameModeHeldByWorkflow = false
@@ -36,15 +39,25 @@ final class AppModel: ObservableObject {
 
     private let application: any ToolboxApplicationCoordinating
     private let genshinWorkflow: any GenshinWorkflowCoordinating
+    private let directLaunchWorkflow: any DirectLaunchWorkflowCoordinating
     private let workflowInitializationError: String?
     private let diagnosticsService = DiagnosticsService()
-    private var genshinTask: Task<Void, Never>?
+    private var workflowTasks: [WorkflowID: Task<Void, Never>] = [:]
+    private var pendingLaunch: PendingWorkflowLaunch?
     private var automaticMountTask: Task<Void, Never>?
     private var didLaunch = false
+
+    private enum PendingWorkflowLaunch {
+        case genshin(GameInstallation)
+        case direct(BuiltInGameWorkflow, GameInstallation)
+    }
+
+    var isGameWorkflowRunning: Bool { !workflowTasks.isEmpty }
 
     init(dependencies: AppDependencies) {
         application = dependencies.application
         genshinWorkflow = dependencies.genshinWorkflow
+        directLaunchWorkflow = dependencies.directLaunchWorkflow
         workflowInitializationError = dependencies.workflowInitializationError
         launch()
     }
@@ -203,7 +216,15 @@ final class AppModel: ObservableObject {
     }
 
     var genshinInstallation: GameInstallation? {
-        configuration.gameInstallations.first { $0.id == GenshinWorkflowCoordinator.installationID }
+        installation(forID: GenshinWorkflowCoordinator.installationID)
+    }
+
+    func installation(for profile: BuiltInGameWorkflow) -> GameInstallation? {
+        installation(forID: profile.id)
+    }
+
+    func installation(forID id: String) -> GameInstallation? {
+        configuration.gameInstallations.first { $0.id == id }
     }
 
     func startGenshinWorkflow() {
@@ -215,6 +236,7 @@ final class AppModel: ObservableObject {
         Task { [self] in
             let conflicts = await genshinWorkflow.exclusiveConflicts(for: installation)
             if !conflicts.isEmpty {
+                pendingLaunch = .genshin(installation)
                 pendingWorkflowConflicts = conflicts
                 showingWorkflowConflict = true
                 return
@@ -223,38 +245,68 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startDirectLaunchWorkflow(_ profile: BuiltInGameWorkflow) {
+        guard let installation = installation(for: profile) else {
+            configuringDirectLaunch = profile
+            return
+        }
+
+        Task { [self] in
+            let conflicts = await directLaunchWorkflow.exclusiveConflicts(for: installation)
+            if !conflicts.isEmpty {
+                pendingLaunch = .direct(profile, installation)
+                pendingWorkflowConflicts = conflicts
+                showingWorkflowConflict = true
+                return
+            }
+            beginDirectLaunchWorkflow(profile: profile, installation: installation)
+        }
+    }
+
     func keepCurrentWorkflow() {
         showingWorkflowConflict = false
         pendingWorkflowConflicts = []
+        pendingLaunch = nil
     }
 
     func replaceCurrentWorkflow() {
         let runIDs = Array(Set(pendingWorkflowConflicts.map(\.holder.runID)))
-        guard let installation = genshinInstallation, !runIDs.isEmpty else {
+        let launch = pendingLaunch
+        guard let launch, !runIDs.isEmpty else {
             keepCurrentWorkflow()
             return
         }
         showingWorkflowConflict = false
         pendingWorkflowConflicts = []
+        pendingLaunch = nil
         Task { [self] in
             await genshinWorkflow.cancel(runIDs: runIDs)
-            if let genshinTask {
-                _ = await genshinTask.value
+            await directLaunchWorkflow.cancel(runIDs: runIDs)
+            let tasks = Array(workflowTasks.values)
+            for task in tasks {
+                _ = await task.value
             }
-            beginGenshinWorkflow(installation: installation)
+            switch launch {
+            case .genshin(let installation):
+                beginGenshinWorkflow(installation: installation)
+            case .direct(let profile, let installation):
+                beginDirectLaunchWorkflow(profile: profile, installation: installation)
+            }
         }
     }
 
     private func beginGenshinWorkflow(installation: GameInstallation) {
-        guard genshinTask == nil else { return }
+        let workflowID = GenshinWorkflowCoordinator.workflowID
+        guard workflowTasks[workflowID] == nil else { return }
         isGenshinWorkflowRunning = true
+        activeWorkflowDisplayName = tr("原神", "Genshin Impact")
         status = TaskStatus(
             phase: .awaitingAuthorization,
             message: tr("正在准备原神启动流程", "Preparing the Genshin launch workflow"),
             progress: 0,
             log: []
         )
-        genshinTask = Task { [self] in
+        workflowTasks[workflowID] = Task { [self] in
             do {
                 let result = try await genshinWorkflow.run(
                     installation: installation,
@@ -272,17 +324,94 @@ final class AppModel: ObservableObject {
                 report(error)
             }
             await refreshGameModeHold()
-            genshinTask = nil
+            workflowTasks[workflowID] = nil
             isGenshinWorkflowRunning = false
             genshinWorkflowStage = nil
+            if workflowTasks.isEmpty {
+                activeWorkflowDisplayName = nil
+            }
+        }
+    }
+
+    private func beginDirectLaunchWorkflow(profile: BuiltInGameWorkflow, installation: GameInstallation) {
+        guard workflowTasks[profile.workflowID] == nil else { return }
+        activeWorkflowDisplayName = profile.displayName
+        status = TaskStatus(
+            phase: .running,
+            message: tr("正在准备 \(profile.displayName) 启动流程", "Preparing the \(profile.displayName) launch workflow"),
+            progress: 0,
+            log: []
+        )
+        workflowTasks[profile.workflowID] = Task { [self] in
+            do {
+                let result = try await directLaunchWorkflow.run(
+                    profile: profile,
+                    installation: installation,
+                    metalHUDEnabled: metalHUDEnabled
+                ) { update in
+                    await self.applyDirectLaunchWorkflowUpdate(update)
+                }
+                applyDirectLaunchWorkflowResult(profile: profile, result: result)
+            } catch is CancellationError {
+                status = TaskStatus(
+                    phase: .cancelled,
+                    message: tr("已取消", "Cancelled")
+                )
+            } catch {
+                report(error)
+            }
+            await refreshGameModeHold()
+            workflowTasks[profile.workflowID] = nil
+            directLaunchWorkflowStage = nil
+            if workflowTasks.isEmpty {
+                activeWorkflowDisplayName = nil
+            }
         }
     }
 
     func cancelGenshinWorkflow() {
-        Task { await genshinWorkflow.cancel() }
+        cancelActiveGameWorkflows()
+    }
+
+    func cancelActiveGameWorkflows() {
+        Task {
+            await genshinWorkflow.cancel()
+            await directLaunchWorkflow.cancel()
+        }
+    }
+
+    func saveDirectLaunchInstallation(_ profile: BuiltInGameWorkflow, _ binding: CrossOverGameBinding) {
+        if saveInstallation(
+            id: profile.id,
+            displayName: profile.displayName,
+            binding: binding,
+            successMessage: tr(
+                "\(profile.displayName) 启动配置已保存",
+                "\(profile.displayName) launch configuration saved"
+            )
+        ) {
+            configuringDirectLaunch = nil
+        }
     }
 
     func saveGenshinInstallation(_ binding: CrossOverGameBinding) {
+        if saveInstallation(
+            id: GenshinWorkflowCoordinator.installationID,
+            displayName: tr("原神", "Genshin Impact"),
+            binding: binding,
+            successMessage: tr("原神启动配置已保存", "Genshin launch configuration saved")
+        ) {
+            showingGenshinConfiguration = false
+        }
+    }
+
+    @discardableResult
+    private func saveInstallation(
+        id: String,
+        displayName: String,
+        binding: CrossOverGameBinding,
+        successMessage: String
+    ) -> Bool {
         do {
             let validated = try CrossOverLaunchConfiguration(
                 crossOverAppURL: URL(fileURLWithPath: binding.applicationPath),
@@ -295,21 +424,22 @@ final class AppModel: ObservableObject {
                 throw ToolboxError.invalidPath(binding.applicationPath)
             }
             let installation = GameInstallation(
-                id: GenshinWorkflowCoordinator.installationID,
-                displayName: tr("原神", "Genshin Impact"),
+                id: id,
+                displayName: displayName,
                 launchBinding: .crossOver(binding)
             )
             configuration.gameInstallations.removeAll { $0.id == installation.id }
             configuration.gameInstallations.append(installation)
             saveConfiguration()
-            showingGenshinConfiguration = false
             status = TaskStatus(
                 phase: .succeeded,
-                message: tr("原神启动配置已保存", "Genshin launch configuration saved"),
+                message: successMessage,
                 progress: 1
             )
+            return true
         } catch {
             report(error)
+            return false
         }
     }
 
@@ -639,23 +769,34 @@ final class AppModel: ObservableObject {
 
     private func recoverIncompleteGameWorkflows() async {
         do {
-            let recovery = try await genshinWorkflow.recoverIncompleteRuns { [weak self] update in
+            let genshinRecovery = try await genshinWorkflow.recoverIncompleteRuns { [weak self] update in
                 await self?.applyGenshinWorkflowUpdate(update)
             }
-            if let failed = recovery.compensated.first(where: { $0.status == .recoveryFailed }) {
+            if let failed = genshinRecovery.compensated.first(where: { $0.status == .recoveryFailed }) {
                 report(ToolboxError.commandFailed(
                     failed.errorDescription ?? tr("上次启动的网络恢复失败", "Failed to recover network state from the previous launch")
                 ))
                 return
             }
-            if !recovery.compensated.isEmpty {
+            if !genshinRecovery.compensated.isEmpty {
                 status = TaskStatus(
                     phase: .succeeded,
                     message: tr("上次中断的网络状态已恢复", "Recovered network state from the interrupted launch"),
                     progress: 1
                 )
             }
-            if let runID = recovery.resumableRunIDs.first {
+
+            let directRecovery = try await directLaunchWorkflow.recoverIncompleteRuns { [weak self] update in
+                await self?.applyDirectLaunchWorkflowUpdate(update)
+            }
+            if let failed = directRecovery.compensated.first(where: { $0.status == .recoveryFailed }) {
+                report(ToolboxError.commandFailed(
+                    failed.errorDescription ?? tr("上次启动流程恢复失败", "Failed to recover the previous launch workflow")
+                ))
+                return
+            }
+
+            if let runID = genshinRecovery.resumableRunIDs.first {
                 guard let installation = genshinInstallation else {
                     report(ToolboxError.commandFailed(tr(
                         "上次游戏会话仍在跟踪中，请先完成原神配置后再启动应用。",
@@ -663,40 +804,103 @@ final class AppModel: ObservableObject {
                     )))
                     return
                 }
-                isGenshinWorkflowRunning = true
-                status = TaskStatus(
-                    phase: .running,
-                    message: tr("正在继续跟踪上次的原神会话", "Resuming the previous Genshin session"),
-                    progress: 0.94
-                )
-                genshinTask = Task { [self] in
-                    do {
-                        let result = try await genshinWorkflow.resume(
-                            runID: runID,
-                            installation: installation,
-                            metalHUDEnabled: metalHUDEnabled
-                        ) { update in
-                            await self.applyGenshinWorkflowUpdate(update)
-                        }
-                        applyGenshinWorkflowResult(result)
-                    } catch is CancellationError {
-                        status = TaskStatus(phase: .cancelled, message: tr("已取消", "Cancelled"))
-                    } catch {
-                        report(error)
-                    }
-                    await refreshGameModeHold()
-                    genshinTask = nil
-                    isGenshinWorkflowRunning = false
-                    genshinWorkflowStage = nil
+                resumeGenshinSession(runID: runID, installation: installation)
+            }
+
+            for item in directRecovery.resumable {
+                guard let profile = BuiltInDirectLaunchWorkflows.workflow(workflowID: item.workflowID) else {
+                    continue
                 }
+                guard let installation = installation(for: profile) else {
+                    report(ToolboxError.commandFailed(tr(
+                        "上次 \(profile.displayName) 会话仍在跟踪中，请先完成配置后再启动应用。",
+                        "A previous \(profile.displayName) session is still being tracked. Configure it, then reopen the app."
+                    )))
+                    continue
+                }
+                resumeDirectLaunchSession(profile: profile, runID: item.runID, installation: installation)
             }
         } catch {
             report(error)
         }
     }
 
+    private func resumeGenshinSession(runID: WorkflowRunID, installation: GameInstallation) {
+        let workflowID = GenshinWorkflowCoordinator.workflowID
+        guard workflowTasks[workflowID] == nil else { return }
+        isGenshinWorkflowRunning = true
+        activeWorkflowDisplayName = tr("原神", "Genshin Impact")
+        status = TaskStatus(
+            phase: .running,
+            message: tr("正在继续跟踪上次的原神会话", "Resuming the previous Genshin session"),
+            progress: 0.94
+        )
+        workflowTasks[workflowID] = Task { [self] in
+            do {
+                let result = try await genshinWorkflow.resume(
+                    runID: runID,
+                    installation: installation,
+                    metalHUDEnabled: metalHUDEnabled
+                ) { update in
+                    await self.applyGenshinWorkflowUpdate(update)
+                }
+                applyGenshinWorkflowResult(result)
+            } catch is CancellationError {
+                status = TaskStatus(phase: .cancelled, message: tr("已取消", "Cancelled"))
+            } catch {
+                report(error)
+            }
+            await refreshGameModeHold()
+            workflowTasks[workflowID] = nil
+            isGenshinWorkflowRunning = false
+            genshinWorkflowStage = nil
+            if workflowTasks.isEmpty {
+                activeWorkflowDisplayName = nil
+            }
+        }
+    }
+
+    private func resumeDirectLaunchSession(
+        profile: BuiltInGameWorkflow,
+        runID: WorkflowRunID,
+        installation: GameInstallation
+    ) {
+        guard workflowTasks[profile.workflowID] == nil else { return }
+        activeWorkflowDisplayName = profile.displayName
+        status = TaskStatus(
+            phase: .running,
+            message: tr("正在继续跟踪上次的 \(profile.displayName) 会话", "Resuming the previous \(profile.displayName) session"),
+            progress: 0.9
+        )
+        workflowTasks[profile.workflowID] = Task { [self] in
+            do {
+                let result = try await directLaunchWorkflow.resume(
+                    profile: profile,
+                    runID: runID,
+                    installation: installation,
+                    metalHUDEnabled: metalHUDEnabled
+                ) { update in
+                    await self.applyDirectLaunchWorkflowUpdate(update)
+                }
+                applyDirectLaunchWorkflowResult(profile: profile, result: result)
+            } catch is CancellationError {
+                status = TaskStatus(phase: .cancelled, message: tr("已取消", "Cancelled"))
+            } catch {
+                report(error)
+            }
+            await refreshGameModeHold()
+            workflowTasks[profile.workflowID] = nil
+            directLaunchWorkflowStage = nil
+            if workflowTasks.isEmpty {
+                activeWorkflowDisplayName = nil
+            }
+        }
+    }
+
     private func refreshGameModeHold() async {
-        gameModeHeldByWorkflow = await genshinWorkflow.gameModeHolderCount() > 0
+        let genshinHolders = await genshinWorkflow.gameModeHolderCount()
+        let directHolders = await directLaunchWorkflow.gameModeHolderCount()
+        gameModeHeldByWorkflow = max(genshinHolders, directHolders) > 0
         if gameModeHeldByWorkflow {
             gameModeEnabled = true
             gameModePolicy = .on
@@ -737,6 +941,52 @@ final class AppModel: ObservableObject {
         status.message = message
         status.progress = update.progress
         genshinWorkflowStage = update.stage
+        activeWorkflowDisplayName = tr("原神", "Genshin Impact")
+        if status.log.last != message {
+            status.log.append(message)
+        }
+        if update.stage == .claimingGameMode {
+            gameModeHeldByWorkflow = true
+            gameModeEnabled = true
+            gameModePolicy = .on
+        }
+        if update.stage == .releasingGameMode {
+            gameModeHeldByWorkflow = false
+        }
+    }
+
+    private func applyDirectLaunchWorkflowUpdate(_ update: DirectLaunchWorkflowUpdate) {
+        let name = update.profile.displayName
+        let message: String
+        switch update.stage {
+        case .recovering:
+            message = tr("正在恢复上次中断的 \(name) 启动流程", "Recovering the previous \(name) launch")
+        case .preflight:
+            message = tr("正在检查 CrossOver 与 \(name) 配置", "Checking CrossOver and the \(name) configuration")
+        case .claimingProcessSession:
+            message = tr("正在占用 \(name) CrossOver 容器", "Claiming the \(name) CrossOver bottle")
+        case .configuringMetalHUD:
+            message = tr("正在配置 MetalHUD", "Configuring MetalHUD")
+        case .launching:
+            message = tr("正在自动启动 \(name)", "Launching \(name) automatically")
+        case .waitingForProcess:
+            message = tr("等待 \(name) 进程出现", "Waiting for the \(name) process")
+        case .applyingQoS:
+            message = tr("正在提升 \(name) 容器中的 CrossOver 进程优先级", "Boosting CrossOver process priority in the \(name) bottle")
+        case .claimingGameMode:
+            message = tr("正在由本工作流占用 Game Mode", "Claiming Game Mode for this workflow")
+        case .waitingForExit:
+            message = tr("\(name) 运行中，关闭游戏后将自动收尾", "\(name) is running; teardown starts when the game exits")
+        case .terminatingResiduals:
+            message = tr("正在结束本容器中的残留进程", "Terminating residual processes in this bottle")
+        case .releasingGameMode:
+            message = tr("正在交还 Game Mode", "Releasing Game Mode")
+        }
+        status.phase = .running
+        status.message = message
+        status.progress = update.progress
+        directLaunchWorkflowStage = update.stage
+        activeWorkflowDisplayName = name
         if status.log.last != message {
             status.log.append(message)
         }
@@ -751,11 +1001,37 @@ final class AppModel: ObservableObject {
     }
 
     private func applyGenshinWorkflowResult(_ result: WorkflowRunResult) {
+        applyWorkflowResult(
+            result,
+            success: tr("原神已退出，残留进程已结束，Game Mode 已按 claim 交还", "Genshin exited; residual processes were terminated and Game Mode was released"),
+            failure: tr("原神启动流程失败", "The Genshin launch workflow failed"),
+            unexpected: tr("原神启动流程以异常状态结束", "The Genshin launch workflow ended in an unexpected state")
+        )
+        DiagnosticFileLogger.write("Genshin workflow finished with status: \(result.status.rawValue)")
+    }
+
+    private func applyDirectLaunchWorkflowResult(profile: BuiltInGameWorkflow, result: WorkflowRunResult) {
+        let name = profile.displayName
+        applyWorkflowResult(
+            result,
+            success: tr("\(name) 已退出，残留进程已结束，Game Mode 已按 claim 交还", "\(name) exited; residual processes were terminated and Game Mode was released"),
+            failure: tr("\(name) 启动流程失败", "The \(name) launch workflow failed"),
+            unexpected: tr("\(name) 启动流程以异常状态结束", "The \(name) launch workflow ended in an unexpected state")
+        )
+        DiagnosticFileLogger.write("\(profile.workflowID) finished with status: \(result.status.rawValue)")
+    }
+
+    private func applyWorkflowResult(
+        _ result: WorkflowRunResult,
+        success: String,
+        failure: String,
+        unexpected: String
+    ) {
         switch result.status {
         case .succeeded:
             status = TaskStatus(
                 phase: .succeeded,
-                message: tr("原神已退出，残留进程已结束，Game Mode 已按 claim 交还", "Genshin exited; residual processes were terminated and Game Mode was released"),
+                message: success,
                 progress: 1,
                 log: status.log
             )
@@ -768,23 +1044,22 @@ final class AppModel: ObservableObject {
         case .recoveryFailed:
             status = TaskStatus(
                 phase: .failed,
-                message: result.errorDescription ?? tr("网络恢复失败", "Network recovery failed"),
+                message: result.errorDescription ?? tr("工作流恢复失败", "Workflow recovery failed"),
                 log: status.log
             )
         case .failed:
             status = TaskStatus(
                 phase: .failed,
-                message: result.errorDescription ?? tr("原神启动流程失败", "The Genshin launch workflow failed"),
+                message: result.errorDescription ?? failure,
                 log: status.log
             )
         default:
             status = TaskStatus(
                 phase: .failed,
-                message: tr("原神启动流程以异常状态结束", "The Genshin launch workflow ended in an unexpected state"),
+                message: unexpected,
                 log: status.log
             )
         }
-        DiagnosticFileLogger.write("Genshin workflow finished with status: \(result.status.rawValue)")
     }
 
     private func saveConfiguration() {

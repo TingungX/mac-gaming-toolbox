@@ -82,6 +82,9 @@ struct DashboardView: View {
         .sheet(isPresented: $model.showingGenshinConfiguration) {
             GenshinConfigurationView().environmentObject(model)
         }
+        .sheet(item: $model.configuringDirectLaunch) { profile in
+            CrossOverGameConfigurationView(profile: profile).environmentObject(model)
+        }
         .sheet(isPresented: $model.showingWorkflowConflict) {
             WorkflowConflictSheet().environmentObject(model)
         }
@@ -136,8 +139,8 @@ struct DashboardView: View {
                         .frame(minWidth: 160)
                 }
                 Spacer(minLength: 8)
-                if model.isGenshinWorkflowRunning {
-                    Button(cancelWorkflowTitle) { model.cancelGenshinWorkflow() }
+                if model.isGameWorkflowRunning {
+                    Button(cancelWorkflowTitle) { model.cancelActiveGameWorkflows() }
                 }
                 Text(AppLanguage.phase(model.status.phase))
                     .font(.caption)
@@ -185,6 +188,53 @@ struct DashboardView: View {
 
                 if expandedWorkflowIDs.contains(GenshinWorkflowCoordinator.workflowID) {
                     WorkflowPreview(steps: GenshinWorkflowCoordinator.stepPreviews)
+                }
+            }
+        }
+        ForEach(BuiltInDirectLaunchWorkflows.all) { profile in
+            FeatureCard(
+                icon: "gamecontroller.fill",
+                title: tr("\(profile.displayName) 一键启动", "\(profile.displayName) One-click Launch"),
+                subtitle: tr(
+                    "自动启动并提升本容器 CrossOver 优先级；游戏退出后结束残留进程并交还 Game Mode",
+                    "Launches automatically and boosts CrossOver priority in this bottle; after the game exits, residual processes are terminated and Game Mode is released"
+                )
+            ) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .bottom) {
+                        Button(tr("启动 \(profile.displayName)", "Launch \(profile.displayName)")) {
+                            model.startDirectLaunchWorkflow(profile)
+                        }
+                        .liquidGlassButton(prominent: true)
+                        Spacer()
+                        Button(model.installation(for: profile) == nil ? tr("首次配置", "Set up") : tr("配置", "Configure")) {
+                            model.configuringDirectLaunch = profile
+                        }
+                    }
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if expandedWorkflowIDs.contains(profile.workflowID) {
+                                expandedWorkflowIDs.remove(profile.workflowID)
+                            } else {
+                                expandedWorkflowIDs.insert(profile.workflowID)
+                            }
+                        }
+                    } label: {
+                        Label(
+                            expandedWorkflowIDs.contains(profile.workflowID)
+                                ? tr("收起工作流预览", "Hide workflow preview")
+                                : tr("预览工作流", "Preview workflow"),
+                            systemImage: expandedWorkflowIDs.contains(profile.workflowID)
+                                ? "chevron.up"
+                                : "chevron.down"
+                        )
+                        .font(.subheadline.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+
+                    if expandedWorkflowIDs.contains(profile.workflowID) {
+                        WorkflowPreview(steps: DirectLaunchWorkflowPresentation.stepPreviews(for: profile))
+                    }
                 }
             }
         }
@@ -274,11 +324,23 @@ struct DashboardView: View {
     }
 
     private var cancelWorkflowTitle: String {
+        if model.genshinWorkflowStage == .isolatingNetwork
+            || model.genshinWorkflowStage == .launching
+            || model.genshinWorkflowStage == .waitingForRendering
+            || model.genshinWorkflowStage == .restoringNetwork {
+            return tr("取消并恢复网络", "Cancel and restore network")
+        }
         switch model.genshinWorkflowStage {
         case .waitingForExit, .terminatingResiduals, .releasingGameMode, .claimingGameMode:
-            tr("结束工作流", "End workflow")
+            return tr("结束工作流", "End workflow")
         default:
-            tr("取消并恢复网络", "Cancel and restore network")
+            break
+        }
+        switch model.directLaunchWorkflowStage {
+        case .waitingForExit, .terminatingResiduals, .releasingGameMode, .claimingGameMode:
+            return tr("结束工作流", "End workflow")
+        default:
+            return tr("取消", "Cancel")
         }
     }
 
@@ -562,7 +624,7 @@ private struct FeatureCard<Content: View>: View {
 }
 
 private struct WorkflowPreview: View {
-    let steps: [GenshinWorkflowStepPreview]
+    let steps: [WorkflowStepPreview]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
