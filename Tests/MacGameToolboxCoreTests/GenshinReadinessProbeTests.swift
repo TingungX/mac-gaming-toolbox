@@ -31,6 +31,7 @@ private func genshinCreateLines(launcherThread: String, pid: String, tid: String
     ])
     #expect(description.arguments.allSatisfy { !$0.contains("login_trace_id") })
     #expect(description.arguments.allSatisfy { !$0.contains(";") && !$0.contains("&&") && !$0.contains("|") })
+    #expect(description.extraEnvironment.isEmpty)
 }
 
 @Test func crossOverAdapterRejectsUntrustedLaunchInputs() throws {

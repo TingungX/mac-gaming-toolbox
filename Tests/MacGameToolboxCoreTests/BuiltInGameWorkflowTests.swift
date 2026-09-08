@@ -14,6 +14,8 @@ import Testing
     #expect(p3r.workflowID != demo.workflowID)
     #expect(p3r.processNames == ["P3R.exe"])
     #expect(demo.processNames == ["P3R.exe"])
+    #expect(p3r.installsP3RFix)
+    #expect(demo.installsP3RFix)
     #expect(BuiltInDirectLaunchWorkflows.workflow(id: p3r.id) == p3r)
     #expect(BuiltInDirectLaunchWorkflows.workflow(workflowID: demo.workflowID) == demo)
 }
@@ -30,6 +32,8 @@ import Testing
     #expect(workflow.steps.filter(\.holding).map(\.id) == ["await-exit"])
     #expect(!workflow.steps.contains { $0.kind.contains("network") })
     #expect(!workflow.steps.contains { $0.id.contains("network") })
+    #expect(workflow.steps.contains { $0.id == "install-p3rfix" && $0.kind == DirectLaunchWorkflowStepKind.installP3RFix })
+    #expect(workflow.revision == 2)
 
     let metalHUD = try JSONDecoder().decode(
         DirectLaunchWorkflowPlan.MetalHUDInput.self,

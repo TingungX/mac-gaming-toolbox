@@ -33,6 +33,12 @@ enum DirectLaunchWorkflowPresentation {
                 icon: "gauge.with.dots.needle.67percent"
             ),
             WorkflowStepPreview(
+                id: "install-p3rfix",
+                title: tr("安装去黑边补丁", "Install aspect-ratio fix"),
+                detail: tr("写入 P3RFix，只解开 16:9 锁并修正 FOV/HUD", "Install P3RFix with aspect, FOV, and HUD fixes only"),
+                icon: "aspectratio"
+            ),
+            WorkflowStepPreview(
                 id: "launch-game",
                 title: tr("启动游戏", "Launch game"),
                 detail: tr("通过已验证的 CrossOver 启动适配器启动", "Launch through the verified CrossOver adapter"),

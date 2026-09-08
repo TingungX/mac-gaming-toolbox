@@ -13,6 +13,7 @@ public struct BuiltInGameWorkflow: Equatable, Hashable, Identifiable, Sendable {
     public let bottleNameExclusions: [String]
     public let executableRelativeCandidates: [String]
     public let processWaitTimeoutSeconds: Int
+    public let installsP3RFix: Bool
 
     public init(
         id: String,
@@ -23,7 +24,8 @@ public struct BuiltInGameWorkflow: Equatable, Hashable, Identifiable, Sendable {
         bottleNameHints: [String],
         bottleNameExclusions: [String] = [],
         executableRelativeCandidates: [String],
-        processWaitTimeoutSeconds: Int = 90
+        processWaitTimeoutSeconds: Int = 90,
+        installsP3RFix: Bool = false
     ) {
         self.id = id
         self.workflowID = workflowID
@@ -34,6 +36,7 @@ public struct BuiltInGameWorkflow: Equatable, Hashable, Identifiable, Sendable {
         self.bottleNameExclusions = bottleNameExclusions
         self.executableRelativeCandidates = executableRelativeCandidates
         self.processWaitTimeoutSeconds = processWaitTimeoutSeconds
+        self.installsP3RFix = installsP3RFix
     }
 
     public var displayName: String {
@@ -54,11 +57,16 @@ public enum BuiltInDirectLaunchWorkflows {
         bottleNameHints: ["p3r", "p3 reload", "persona 3"],
         bottleNameExclusions: ["demo"],
         executableRelativeCandidates: [
+            "Program Files (x86)/Steam/steamapps/common/P3R/P3R/Binaries/Win64/P3R.exe",
+            "Program Files (x86)/Steam/steamapps/common/Persona 3 Reload/P3R/Binaries/Win64/P3R.exe",
+            "Program Files/Steam/steamapps/common/P3R/P3R/Binaries/Win64/P3R.exe",
+            "Program Files/Steam/steamapps/common/Persona 3 Reload/P3R/Binaries/Win64/P3R.exe",
             "Program Files (x86)/Steam/steamapps/common/P3R/P3R.exe",
             "Program Files (x86)/Steam/steamapps/common/Persona 3 Reload/P3R.exe",
             "Program Files/Steam/steamapps/common/P3R/P3R.exe",
             "Program Files/Steam/steamapps/common/Persona 3 Reload/P3R.exe"
-        ]
+        ],
+        installsP3RFix: true
     )
 
     public static let p3rDemo = BuiltInGameWorkflow(
@@ -69,11 +77,18 @@ public enum BuiltInDirectLaunchWorkflows {
         processNames: ["P3R.exe"],
         bottleNameHints: ["p3r demo", "p3rdemo", "p3 reload demo", "persona 3 reload demo"],
         executableRelativeCandidates: [
+            "Program Files (x86)/Steam/steamapps/common/P3R Demo/P3R/Binaries/Win64/P3R.exe",
+            "Program Files (x86)/Steam/steamapps/common/P3RDemo/P3R/Binaries/Win64/P3R.exe",
+            "Program Files (x86)/Steam/steamapps/common/Persona 3 Reload Demo/P3R/Binaries/Win64/P3R.exe",
+            "Program Files/Steam/steamapps/common/P3R Demo/P3R/Binaries/Win64/P3R.exe",
+            "Program Files/Steam/steamapps/common/P3RDemo/P3R/Binaries/Win64/P3R.exe",
+            "Program Files/Steam/steamapps/common/Persona 3 Reload Demo/P3R/Binaries/Win64/P3R.exe",
             "Program Files (x86)/Steam/steamapps/common/P3RDemo/P3R.exe",
             "Program Files (x86)/Steam/steamapps/common/Persona 3 Reload Demo/P3R.exe",
             "Program Files/Steam/steamapps/common/P3RDemo/P3R.exe",
             "Program Files/Steam/steamapps/common/Persona 3 Reload Demo/P3R.exe"
-        ]
+        ],
+        installsP3RFix: true
     )
 
     public static let all: [BuiltInGameWorkflow] = [p3r, p3rDemo]
@@ -91,6 +106,7 @@ public enum DirectLaunchWorkflowStepKind {
     public static let preflight = "environment.preflight"
     public static let claimProcessSession = "process.session.claim"
     public static let configureMetalHUD = "metalhud.configure"
+    public static let installP3RFix = "game.p3r.aspectFix.install"
     public static let launch = "game.launch.crossover"
     public static let awaitProcess = "game.awaitProcess"
     public static let applyQoS = "process.applyQoS"
@@ -116,6 +132,7 @@ public enum DirectLaunchWorkflowPlan {
         "preflight",
         "claim-process-session",
         "configure-metalhud",
+        "install-p3rfix",
         "launch-game",
         "await-process",
         "apply-qos",
@@ -134,7 +151,7 @@ public enum DirectLaunchWorkflowPlan {
         let encoder = JSONEncoder()
         return CompiledWorkflow(
             id: workflowID,
-            revision: 1,
+            revision: 2,
             steps: [
                 WorkflowStepDefinition(id: "preflight", kind: DirectLaunchWorkflowStepKind.preflight),
                 WorkflowStepDefinition(
@@ -146,6 +163,7 @@ public enum DirectLaunchWorkflowPlan {
                     kind: DirectLaunchWorkflowStepKind.configureMetalHUD,
                     input: try encoder.encode(MetalHUDInput(enabled: metalHUDEnabled))
                 ),
+                WorkflowStepDefinition(id: "install-p3rfix", kind: DirectLaunchWorkflowStepKind.installP3RFix),
                 WorkflowStepDefinition(id: "launch-game", kind: DirectLaunchWorkflowStepKind.launch),
                 WorkflowStepDefinition(
                     id: "await-process",

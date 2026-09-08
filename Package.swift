@@ -14,7 +14,10 @@ let package = Package(
         .executableTarget(
             name: "MacGameToolbox",
             dependencies: ["MacGameToolboxCore"],
-            resources: [.process("Assets.xcassets")],
+            resources: [
+                .process("Assets.xcassets"),
+                .copy("Resources/P3RFix")
+            ],
             linkerSettings: [.linkedFramework("ServiceManagement"), .linkedFramework("Security")]
         ),
         .executableTarget(

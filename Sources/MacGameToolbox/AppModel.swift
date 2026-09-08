@@ -967,6 +967,8 @@ final class AppModel: ObservableObject {
             message = tr("正在占用 \(name) CrossOver 容器", "Claiming the \(name) CrossOver bottle")
         case .configuringMetalHUD:
             message = tr("正在配置 MetalHUD", "Configuring MetalHUD")
+        case .installingAspectFix:
+            message = tr("正在为 \(name) 安装去黑边补丁", "Installing the \(name) aspect-ratio fix")
         case .launching:
             message = tr("正在自动启动 \(name)", "Launching \(name) automatically")
         case .waitingForProcess:

@@ -7,6 +7,7 @@ public enum CrossOverLaunchError: Error, Equatable, Sendable {
     case invalidExecutablePath
     case invalidWorkingDirectory
     case invalidLogFile
+    case invalidWineDllOverrides
 }
 
 /// A CrossOver application bundle. The bundle is only used to derive cxstart;
@@ -139,11 +140,18 @@ public struct CrossOverProcessLaunchDescription: Equatable, Sendable {
     public let executableURL: URL
     public let arguments: [String]
     public let traceLogURL: URL
+    public let extraEnvironment: [String: String]
 
-    public init(executableURL: URL, arguments: [String], traceLogURL: URL) {
+    public init(
+        executableURL: URL,
+        arguments: [String],
+        traceLogURL: URL,
+        extraEnvironment: [String: String] = [:]
+    ) {
         self.executableURL = executableURL
         self.arguments = arguments
         self.traceLogURL = traceLogURL
+        self.extraEnvironment = extraEnvironment
     }
 }
 
@@ -158,7 +166,10 @@ public struct CrossOverLaunchAdapter: Sendable {
         self.configuration = configuration
     }
 
-    public func makeProcessLaunchDescription(logFileURL: URL) throws -> CrossOverProcessLaunchDescription {
+    public func makeProcessLaunchDescription(
+        logFileURL: URL,
+        wineDllOverrides: String? = nil
+    ) throws -> CrossOverProcessLaunchDescription {
         let normalizedLogURL = logFileURL.standardizedFileURL
         guard normalizedLogURL.isFileURL,
               normalizedLogURL.path.hasPrefix("/"),
@@ -168,6 +179,14 @@ public struct CrossOverLaunchAdapter: Sendable {
                   scalar.value >= 0x20 && scalar.value != 0x7f
               }) else {
             throw CrossOverLaunchError.invalidLogFile
+        }
+
+        var extraEnvironment: [String: String] = [:]
+        if let wineDllOverrides {
+            guard wineDllOverrides == P3RFixRelease.wineDllOverrides else {
+                throw CrossOverLaunchError.invalidWineDllOverrides
+            }
+            extraEnvironment["WINEDLLOVERRIDES"] = wineDllOverrides
         }
 
         var arguments = ["--bottle", configuration.bottle.value]
@@ -183,7 +202,8 @@ public struct CrossOverLaunchAdapter: Sendable {
         return CrossOverProcessLaunchDescription(
             executableURL: configuration.crossOverApp.cxstartURL,
             arguments: arguments,
-            traceLogURL: normalizedLogURL
+            traceLogURL: normalizedLogURL,
+            extraEnvironment: extraEnvironment
         )
     }
 }

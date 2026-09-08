@@ -8,6 +8,7 @@ enum DirectLaunchWorkflowStage: Sendable {
     case preflight
     case claimingProcessSession
     case configuringMetalHUD
+    case installingAspectFix
     case launching
     case waitingForProcess
     case applyingQoS
@@ -89,6 +90,9 @@ actor DirectLaunchWorkflowCoordinator: DirectLaunchWorkflowCoordinating {
                 },
                 WorkflowStepRegistration(kind: DirectLaunchWorkflowStepKind.configureMetalHUD, version: 1) {
                     DirectLaunchMetalHUDStep(runtimeStore: runtimeStore)
+                },
+                WorkflowStepRegistration(kind: DirectLaunchWorkflowStepKind.installP3RFix, version: 1) {
+                    DirectLaunchInstallP3RFixStep(runtimeStore: runtimeStore)
                 },
                 WorkflowStepRegistration(kind: DirectLaunchWorkflowStepKind.launch, version: 1) {
                     DirectLaunchLaunchStep(runtimeStore: runtimeStore)
@@ -416,7 +420,10 @@ private actor DirectLaunchRunContext {
             workingDirectoryPath: binding.workingDirectoryPath
         )
         let adapter = CrossOverLaunchAdapter(configuration: configuration)
-        let description = try adapter.makeProcessLaunchDescription(logFileURL: traceURL)
+        let description = try adapter.makeProcessLaunchDescription(
+            logFileURL: traceURL,
+            wineDllOverrides: profile.installsP3RFix ? P3RFixRelease.wineDllOverrides : nil
+        )
         guard FileManager.default.fileExists(atPath: configuration.crossOverApp.url.path),
               FileManager.default.isExecutableFile(atPath: description.executableURL.path) else {
             throw DirectLaunchWorkflowError.crossOverUnavailable
@@ -432,6 +439,31 @@ private actor DirectLaunchRunContext {
         launchDescription = description
     }
 
+    func installP3RFix() throws {
+        guard profile.installsP3RFix else { return }
+        guard case .crossOver(let binding) = installation.launchBinding else {
+            throw DirectLaunchWorkflowError.invalidInstallation(profile.displayName)
+        }
+        guard let executableURL = CrossOverGamePathDiscovery.nativeURL(
+            forWindowsPath: binding.executablePath,
+            inBottle: binding.bottleName
+        ) else {
+            throw DirectLaunchWorkflowError.aspectFixInstallFailed(
+                P3RFixInstallError.destinationEscapedBottle.localizedDescription
+            )
+        }
+        do {
+            try P3RFixInstaller.install(
+                payload: try BundledP3RFixPayload.load(),
+                executableURL: executableURL
+            )
+        } catch let error as DirectLaunchWorkflowError {
+            throw error
+        } catch {
+            throw DirectLaunchWorkflowError.aspectFixInstallFailed(error.localizedDescription)
+        }
+    }
+
     func setMetalHUDEnabled(_ enabled: Bool) {
         metalHUDEnabled = enabled
     }
@@ -445,9 +477,14 @@ private actor DirectLaunchRunContext {
         process.arguments = launchDescription.arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        if metalHUDEnabled {
+        if metalHUDEnabled || !launchDescription.extraEnvironment.isEmpty {
             var environment = ProcessInfo.processInfo.environment
-            environment["MTL_HUD_ENABLED"] = "1"
+            for (key, value) in launchDescription.extraEnvironment {
+                environment[key] = value
+            }
+            if metalHUDEnabled {
+                environment["MTL_HUD_ENABLED"] = "1"
+            }
             process.environment = environment
         }
         try process.run()
@@ -493,6 +530,17 @@ private struct DirectLaunchMetalHUDStep: WorkflowStepExecuting {
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.configuringMetalHUD, progress: 0.2)
         await runtime.setMetalHUDEnabled(input.enabled)
+        return .completed
+    }
+}
+
+private struct DirectLaunchInstallP3RFixStep: WorkflowStepExecuting {
+    let runtimeStore: DirectLaunchRuntimeStore
+
+    func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
+        let runtime = try await runtimeStore.context(for: context.runID)
+        await runtime.report(.installingAspectFix, progress: 0.28)
+        try await runtime.installP3RFix()
         return .completed
     }
 }
@@ -736,7 +784,7 @@ private struct DirectLaunchReleaseProcessSessionStep: WorkflowStepExecuting {
     }
 }
 
-private enum DirectLaunchWorkflowError: Error, LocalizedError {
+enum DirectLaunchWorkflowError: Error, LocalizedError {
     case missingRuntime(WorkflowRunID)
     case invalidInstallation(String)
     case crossOverUnavailable
@@ -746,6 +794,8 @@ private enum DirectLaunchWorkflowError: Error, LocalizedError {
     case processWaitTimedOut(String)
     case gameProcessNotFound(String)
     case terminationFailed(String)
+    case aspectFixPayloadMissing
+    case aspectFixInstallFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -767,6 +817,10 @@ private enum DirectLaunchWorkflowError: Error, LocalizedError {
             tr("启动后未找到 \(name) Wine 进程", "No \(name) Wine process was found after launch")
         case .terminationFailed(let message):
             tr("结束残留进程失败：\(message)", "Failed to terminate residual processes: \(message)")
+        case .aspectFixPayloadMissing:
+            tr("找不到内置的 P3R 去黑边补丁", "The bundled P3R aspect-ratio fix is missing")
+        case .aspectFixInstallFailed(let message):
+            tr("安装 P3R 去黑边补丁失败：\(message)", "Failed to install the P3R aspect-ratio fix: \(message)")
         }
     }
 }

@@ -110,6 +110,43 @@ public enum CrossOverGamePathDiscovery {
         return nil
     }
 
+    /// Resolves a Windows path such as `C:\Games\P3R.exe` against a bottle's
+    /// `dosdevices` mapping. Returns nil when the drive is missing or the
+    /// standardized path would leave that drive root.
+    public static func nativeURL(
+        forWindowsPath windowsPath: String,
+        inBottle bottle: String,
+        fileManager: FileManager = .default,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL? {
+        let trimmed = windowsPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3,
+              let drive = trimmed.first,
+              drive.isLetter,
+              trimmed.dropFirst().first == ":" else {
+            return nil
+        }
+        let remainder = String(trimmed.dropFirst(2))
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !remainder.isEmpty, !remainder.contains("\0") else { return nil }
+
+        let device = bottlesDirectory(homeURL: homeURL)
+            .appendingPathComponent(bottle, isDirectory: true)
+            .appendingPathComponent("dosdevices", isDirectory: true)
+            .appendingPathComponent("\(String(drive).lowercased()):")
+        guard fileManager.fileExists(atPath: device.path) else { return nil }
+        let driveRoot = device.resolvingSymlinksInPath().standardizedFileURL
+        let native = remainder.split(separator: "/").reduce(driveRoot) { partial, component in
+            partial.appendingPathComponent(String(component))
+        }.standardizedFileURL
+        let rootPath = driveRoot.path
+        guard native.path == rootPath || native.path.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/") else {
+            return nil
+        }
+        return native
+    }
+
     public static func suggestion(
         existing: CrossOverGameBinding?,
         workflow: BuiltInGameWorkflow,

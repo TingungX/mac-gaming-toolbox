@@ -1,0 +1,10 @@
+P3RFix v1.2.4 (Steam)
+https://github.com/Lyall/P3RFix
+License: MIT (see P3RFix_LICENSE.md)
+
+Ultimate ASI Loader (dsound.dll)
+https://github.com/ThirteenAG/Ultimate-ASI-Loader
+License: MIT (see UltimateASILoader_LICENSE.md)
+
+The toolbox copies these files next to P3R.exe and writes a managed
+P3RFix.ini that enables only aspect ratio, FOV, and HUD fixes.
