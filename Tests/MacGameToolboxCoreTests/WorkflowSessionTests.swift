@@ -141,6 +141,38 @@ actor AdjustableGameModeRunner: CommandRunning {
     #expect(BottleProcessSession.boostablePIDs(processes, bottle: genshin) == [20, 30, 40])
 }
 
+@Test func bottleMatchRequiresPathAndFlagBoundaries() {
+    let retail = SystemProcess(
+        pid: 10,
+        parentPID: 1,
+        command: "/Users/me/Library/Application Support/CrossOver/Bottles/P3R/drive_c/P3R.exe"
+    )
+    let demo = SystemProcess(
+        pid: 20,
+        parentPID: 1,
+        command: "/Users/me/Library/Application Support/CrossOver/Bottles/P3R Demo/drive_c/P3R.exe"
+    )
+    let retailLaunch = SystemProcess(
+        pid: 30,
+        parentPID: 1,
+        command: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart --bottle P3R -- P3R.exe"
+    )
+    let demoLaunch = SystemProcess(
+        pid: 40,
+        parentPID: 1,
+        command: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart --bottle P3R Demo --wait-ready -- P3R.exe"
+    )
+
+    #expect(BottleProcessSession.matches(retail, bottle: "P3R"))
+    #expect(!BottleProcessSession.matches(retail, bottle: "P3R Demo"))
+    #expect(BottleProcessSession.matches(demo, bottle: "P3R Demo"))
+    #expect(!BottleProcessSession.matches(demo, bottle: "P3R"))
+    #expect(BottleProcessSession.matches(retailLaunch, bottle: "P3R"))
+    #expect(!BottleProcessSession.matches(retailLaunch, bottle: "P3R Demo"))
+    #expect(BottleProcessSession.matches(demoLaunch, bottle: "P3R Demo"))
+    #expect(!BottleProcessSession.matches(demoLaunch, bottle: "P3R"))
+}
+
 @Test func gameStillRunningUsesExecutableIdentityNotLauncherArguments() {
     let genshin = "原神（国服）"
     let launcher = SystemProcess(
@@ -181,6 +213,91 @@ actor AdjustableGameModeRunner: CommandRunning {
             gameProcessNames: ["YuanShen.exe"]
         )
     )
+    #expect(
+        !BottleProcessSession.gameStillRunning(
+            [launcher, hungGame],
+            bottle: genshin,
+            claimedPIDs: [20],
+            gameProcessNames: ["YuanShen.exe"],
+            preexistingGamePIDs: [99]
+        )
+    )
+}
+
+@Test func thisRunGameProcessesIgnoresSiblingBottleWithSameExecutableName() {
+    let demoBottle = "P3R Demo"
+    let sibling = SystemProcess(
+        pid: 100,
+        parentPID: 1,
+        command: "/Users/me/Library/Application Support/CrossOver/Bottles/P3R/drive_c/P3R.exe",
+        comm: "P3R.exe"
+    )
+    let detachedSibling = SystemProcess(
+        pid: 101,
+        parentPID: 1,
+        command: #"C:\P3R\Binaries\Win64\P3R.exe"#,
+        comm: "P3R.exe"
+    )
+    let launched = SystemProcess(
+        pid: 200,
+        parentPID: 1,
+        command: #"C:\P3R Demo\Binaries\Win64\P3R.exe"#,
+        comm: "P3R.exe"
+    )
+    let demoWineserver = SystemProcess(
+        pid: 50,
+        parentPID: 1,
+        command: "/Users/me/Library/Application Support/CrossOver/Bottles/\(demoBottle)/wineserver"
+    )
+    let processes = [sibling, detachedSibling, launched, demoWineserver]
+    let preexisting: Set<Int32> = [100, 101]
+
+    #expect(
+        BottleProcessSession.gameExecutablePIDs(processes, names: ["P3R.exe"]) == [100, 101, 200]
+    )
+
+    let awaitingLaunch = BottleProcessSession.thisRunGameProcesses(
+        [sibling, detachedSibling, demoWineserver],
+        bottle: demoBottle,
+        gameProcessNames: ["P3R.exe"],
+        preexistingGamePIDs: preexisting
+    )
+    #expect(awaitingLaunch.isEmpty)
+
+    let matched = BottleProcessSession.thisRunGameProcesses(
+        processes,
+        bottle: demoBottle,
+        gameProcessNames: ["P3R.exe"],
+        preexistingGamePIDs: preexisting
+    )
+    #expect(Set(matched.map(\.pid)) == [200])
+
+    #expect(
+        !BottleProcessSession.gameStillRunning(
+            [sibling, detachedSibling, demoWineserver],
+            bottle: demoBottle,
+            claimedPIDs: [],
+            gameProcessNames: ["P3R.exe"],
+            preexistingGamePIDs: preexisting
+        )
+    )
+    #expect(
+        BottleProcessSession.gameStillRunning(
+            processes,
+            bottle: demoBottle,
+            claimedPIDs: [],
+            gameProcessNames: ["P3R.exe"],
+            preexistingGamePIDs: preexisting
+        )
+    )
+
+    let scoped = BottleProcessSession.scopedProcesses(
+        processes,
+        bottle: demoBottle,
+        gameProcessNames: ["P3R.exe"],
+        preexistingGamePIDs: preexisting
+    )
+    #expect(Set(scoped.map(\.pid)) == [50, 200])
 }
 
 @Test func terminateForceKillsDetachedGameExecutableWithoutBottlePath() async {
@@ -217,6 +334,103 @@ actor AdjustableGameModeRunner: CommandRunning {
     #expect(!signaler.signals.contains(where: { $0.1 == 10 }))
     let firstGameSignal = signaler.signals.first { $0.1 == 99 }
     #expect(firstGameSignal?.0 == SIGKILL)
+}
+
+@Test func terminateDoesNotKillPreexistingSameNamedGameInAnotherBottle() async {
+    let demoBottle = "P3R Demo"
+    let processes = [
+        SystemProcess(
+            pid: 50,
+            parentPID: 1,
+            command: "/Users/me/Library/Application Support/CrossOver/Bottles/\(demoBottle)/wineserver"
+        ),
+        SystemProcess(
+            pid: 100,
+            parentPID: 1,
+            command: #"C:\P3R\Binaries\Win64\P3R.exe"#,
+            comm: "P3R.exe"
+        ),
+        SystemProcess(
+            pid: 200,
+            parentPID: 1,
+            command: #"C:\P3R Demo\Binaries\Win64\P3R.exe"#,
+            comm: "P3R.exe"
+        )
+    ]
+    let signaler = RecordingProcessSignaler(alive: [50, 100, 200])
+    let report = await BottleProcessSession.terminate(
+        claimedPIDs: [],
+        processes: processes,
+        bottle: demoBottle,
+        signaler: signaler,
+        gameProcessNames: ["P3R.exe"],
+        preexistingGamePIDs: [100],
+        selfPID: 7,
+        graceNanoseconds: 0
+    )
+
+    #expect(Set(report.requested) == [50, 200])
+    #expect(report.remaining.isEmpty)
+    #expect(signaler.signals.contains(where: { $0.0 == SIGKILL && $0.1 == 200 }))
+    #expect(!signaler.signals.contains(where: { $0.1 == 100 }))
+}
+
+@Test func leftoverBottlePathGameIsTornDownButDoesNotKeepAwaitExitBlocked() async {
+    let demoBottle = "P3R Demo"
+    let leftover = SystemProcess(
+        pid: 80,
+        parentPID: 1,
+        command: "/Users/me/Library/Application Support/CrossOver/Bottles/\(demoBottle)/drive_c/P3R.exe",
+        comm: "P3R.exe"
+    )
+    let launched = SystemProcess(
+        pid: 200,
+        parentPID: 1,
+        command: #"C:\P3R Demo\Binaries\Win64\P3R.exe"#,
+        comm: "P3R.exe"
+    )
+
+    #expect(
+        BottleProcessSession.thisRunGameProcesses(
+            [leftover],
+            bottle: demoBottle,
+            gameProcessNames: ["P3R.exe"],
+            preexistingGamePIDs: [80]
+        ).isEmpty
+    )
+    #expect(
+        Set(
+            BottleProcessSession.thisRunGameProcesses(
+                [leftover, launched],
+                bottle: demoBottle,
+                gameProcessNames: ["P3R.exe"],
+                preexistingGamePIDs: [80]
+            ).map(\.pid)
+        ) == [200]
+    )
+    #expect(
+        !BottleProcessSession.gameStillRunning(
+            [leftover],
+            bottle: demoBottle,
+            claimedPIDs: [],
+            gameProcessNames: ["P3R.exe"],
+            preexistingGamePIDs: [80]
+        )
+    )
+
+    let signaler = RecordingProcessSignaler(alive: [80, 200])
+    let report = await BottleProcessSession.terminate(
+        claimedPIDs: [],
+        processes: [leftover],
+        bottle: demoBottle,
+        signaler: signaler,
+        gameProcessNames: ["P3R.exe"],
+        preexistingGamePIDs: [80],
+        selfPID: 7,
+        graceNanoseconds: 0
+    )
+    #expect(Set(report.requested) == [80])
+    #expect(signaler.signals.contains(where: { $0.1 == 80 }))
 }
 
 @Test func crossOverBottleShutdownTargetsTheBoundPrefix() {

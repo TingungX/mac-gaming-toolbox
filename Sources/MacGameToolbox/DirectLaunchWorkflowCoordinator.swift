@@ -279,6 +279,7 @@ actor DirectLaunchWorkflowCoordinator: DirectLaunchWorkflowCoordinating {
             try? await exclusiveLocks.acquire(key: .processSession(bottle: bottle), holder: holder)
         }
         if let sidecar = await context.loadSidecar() {
+            await context.restorePreexistingGamePIDs(Set(sidecar.preexistingGamePIDs ?? []))
             await context.restoreClaimedPIDs(Set(sidecar.claimedPIDs))
             if sidecar.gameModeHeld, let baseline = sidecar.gameModeBaseline {
                 await gameModeClaims.restoreHolder(runID: runID, baseline: baseline)
@@ -319,6 +320,7 @@ private struct DirectLaunchSessionSidecar: Codable, Sendable {
     var gameModeBaseline: GameModePolicy?
     var gameModeHeld: Bool
     var claimedPIDs: [Int32]
+    var preexistingGamePIDs: [Int32]?
 }
 
 private actor DirectLaunchRunContext {
@@ -332,6 +334,7 @@ private actor DirectLaunchRunContext {
     private var launchProcess: Process?
     private var metalHUDEnabled = false
     private var claimedPIDs: Set<Int32> = []
+    private var preexistingGamePIDs: Set<Int32> = []
     private var gameModeBaseline: GameModePolicy?
     private var gameModeHeld = false
 
@@ -370,12 +373,24 @@ private actor DirectLaunchRunContext {
 
     func claimedProcessIDs() -> Set<Int32> { claimedPIDs }
 
+    func preexistingGameProcessIDs() -> Set<Int32> { preexistingGamePIDs }
+
     func restoreClaimedPIDs(_ pids: Set<Int32>) {
-        claimedPIDs = pids
+        claimedPIDs = pids.filter { $0 > 1 && !preexistingGamePIDs.contains($0) }
+    }
+
+    func restorePreexistingGamePIDs(_ pids: Set<Int32>) {
+        preexistingGamePIDs = pids.filter { $0 > 1 }
+        claimedPIDs.subtract(preexistingGamePIDs)
+    }
+
+    func snapshotPreexistingGamePIDs(from processes: [SystemProcess]) {
+        preexistingGamePIDs = BottleProcessSession.gameExecutablePIDs(processes, names: processNames())
+        claimedPIDs.subtract(preexistingGamePIDs)
     }
 
     func claimProcessIDs(_ pids: [Int32]) {
-        claimedPIDs.formUnion(pids.filter { $0 > 1 })
+        claimedPIDs.formUnion(pids.filter { $0 > 1 && !preexistingGamePIDs.contains($0) })
     }
 
     func markGameModeClaimed(baseline: GameModePolicy?) {
@@ -394,7 +409,8 @@ private actor DirectLaunchRunContext {
             bottleName: bottle,
             gameModeBaseline: gameModeBaseline,
             gameModeHeld: gameModeHeld,
-            claimedPIDs: claimedPIDs.sorted()
+            claimedPIDs: claimedPIDs.sorted(),
+            preexistingGamePIDs: preexistingGamePIDs.sorted()
         )
         do {
             try FileManager.default.createDirectory(
@@ -578,15 +594,22 @@ private struct DirectLaunchAwaitProcessStep: WorkflowStepExecuting {
         }
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.waitingForProcess, progress: 0.55)
-        _ = try await runtime.bottleName()
+        let bottle = try await runtime.bottleName()
         let names = await runtime.processNames()
+        let preexisting = await runtime.preexistingGameProcessIDs()
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(input.timeoutSeconds))
 
         while clock.now < deadline {
             try Task.checkCancellation()
             let processes = try await gamingService.runningProcesses()
-            let matched = processes.filter { BottleProcessSession.matchesGameExecutable($0, names: names) }
+            let matched = BottleProcessSession.thisRunGameProcesses(
+                processes,
+                bottle: bottle,
+                claimedPIDs: await runtime.claimedProcessIDs(),
+                gameProcessNames: names,
+                preexistingGamePIDs: preexisting
+            )
             if !matched.isEmpty {
                 await runtime.claimProcessIDs(matched.map(\.pid))
                 await runtime.persistSidecar()
@@ -615,7 +638,8 @@ private struct DirectLaunchQoSStep: WorkflowStepExecuting {
             processes,
             bottle: bottle,
             additionallyClaimed: await runtime.claimedProcessIDs(),
-            gameProcessNames: await runtime.processNames()
+            gameProcessNames: await runtime.processNames(),
+            preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
         )
         guard !pids.isEmpty else {
             throw DirectLaunchWorkflowError.gameProcessNotFound(await runtime.displayName())
@@ -645,6 +669,8 @@ private struct DirectLaunchClaimProcessSessionStep: WorkflowStepExecuting {
                 title: await runtime.displayName()
             )
         )
+        let processes = (try? await gamingService.runningProcesses()) ?? []
+        await runtime.snapshotPreexistingGamePIDs(from: processes)
         await runtime.persistSidecar()
         return WorkflowStepExecution(recoveryHandle: WorkflowRecoveryHandle(
             capabilityID: "process.session"
@@ -678,7 +704,8 @@ private struct DirectLaunchClaimProcessSessionStep: WorkflowStepExecuting {
             processes: processes,
             bottle: bottle,
             signaler: processSignaler,
-            gameProcessNames: names
+            gameProcessNames: names,
+            preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
         )
         await exclusiveLocks.release(key: .processSession(bottle: bottle), runID: context.runID)
         await runtime.removeSidecar()
@@ -732,7 +759,8 @@ private struct DirectLaunchAwaitExitStep: WorkflowStepExecuting {
                 processes,
                 bottle: bottle,
                 additionallyClaimed: await runtime.claimedProcessIDs(),
-                gameProcessNames: names
+                gameProcessNames: names,
+                preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
             )
             await runtime.claimProcessIDs(scoped.map(\.pid))
             await runtime.persistSidecar()
@@ -740,7 +768,8 @@ private struct DirectLaunchAwaitExitStep: WorkflowStepExecuting {
                 processes,
                 bottle: bottle,
                 claimedPIDs: await runtime.claimedProcessIDs(),
-                gameProcessNames: names
+                gameProcessNames: names,
+                preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
             )
             if !stillRunning { return .completed }
             try await Task.sleep(for: .seconds(1))
@@ -768,7 +797,8 @@ private struct DirectLaunchTerminateResidualsStep: WorkflowStepExecuting {
             processes: processes,
             bottle: bottle,
             signaler: processSignaler,
-            gameProcessNames: names
+            gameProcessNames: names,
+            preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
         )
         if !report.failures.isEmpty {
             throw DirectLaunchWorkflowError.terminationFailed(report.failures.joined(separator: "; "))

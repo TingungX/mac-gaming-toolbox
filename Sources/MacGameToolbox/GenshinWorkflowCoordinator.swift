@@ -325,6 +325,7 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
             try? await exclusiveLocks.acquire(key: .processSession(bottle: bottle), holder: holder)
         }
         if let sidecar = await context.loadSidecar() {
+            await context.restorePreexistingGamePIDs(Set(sidecar.preexistingGamePIDs ?? []))
             await context.restoreClaimedPIDs(Set(sidecar.claimedPIDs))
             if sidecar.gameModeHeld, let baseline = sidecar.gameModeBaseline {
                 await gameModeClaims.restoreHolder(runID: runID, baseline: baseline)
@@ -400,6 +401,7 @@ private struct GenshinSessionSidecar: Codable, Sendable {
     var gameModeBaseline: GameModePolicy?
     var gameModeHeld: Bool
     var claimedPIDs: [Int32]
+    var preexistingGamePIDs: [Int32]?
 }
 
 private actor GenshinRunContext {
@@ -415,6 +417,7 @@ private actor GenshinRunContext {
     private var networkHandle: CapabilityRecoveryHandle?
     private var leaseSession: NetworkIsolationLeaseSession?
     private var claimedPIDs: Set<Int32> = []
+    private var preexistingGamePIDs: Set<Int32> = []
     private var gameModeBaseline: GameModePolicy?
     private var gameModeHeld = false
 
@@ -459,12 +462,24 @@ private actor GenshinRunContext {
 
     func claimedProcessIDs() -> Set<Int32> { claimedPIDs }
 
+    func preexistingGameProcessIDs() -> Set<Int32> { preexistingGamePIDs }
+
     func restoreClaimedPIDs(_ pids: Set<Int32>) {
-        claimedPIDs = pids
+        claimedPIDs = pids.filter { $0 > 1 && !preexistingGamePIDs.contains($0) }
+    }
+
+    func restorePreexistingGamePIDs(_ pids: Set<Int32>) {
+        preexistingGamePIDs = pids.filter { $0 > 1 }
+        claimedPIDs.subtract(preexistingGamePIDs)
+    }
+
+    func snapshotPreexistingGamePIDs(from processes: [SystemProcess]) {
+        preexistingGamePIDs = BottleProcessSession.gameExecutablePIDs(processes, names: gameProcessNames())
+        claimedPIDs.subtract(preexistingGamePIDs)
     }
 
     func claimProcessIDs(_ pids: [Int32]) {
-        claimedPIDs.formUnion(pids.filter { $0 > 1 })
+        claimedPIDs.formUnion(pids.filter { $0 > 1 && !preexistingGamePIDs.contains($0) })
     }
 
     func markGameModeClaimed(baseline: GameModePolicy?) {
@@ -483,7 +498,8 @@ private actor GenshinRunContext {
             bottleName: bottle,
             gameModeBaseline: gameModeBaseline,
             gameModeHeld: gameModeHeld,
-            claimedPIDs: claimedPIDs.sorted()
+            claimedPIDs: claimedPIDs.sorted(),
+            preexistingGamePIDs: preexistingGamePIDs.sorted()
         )
         do {
             try FileManager.default.createDirectory(
@@ -917,7 +933,8 @@ private struct GenshinQoSStep: WorkflowStepExecuting {
             processes,
             bottle: bottle,
             additionallyClaimed: await runtime.claimedProcessIDs(),
-            gameProcessNames: names
+            gameProcessNames: names,
+            preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
         )
         guard !pids.isEmpty else {
             throw GenshinWorkflowCoordinatorError.gameProcessNotFound
@@ -947,6 +964,8 @@ private struct GenshinClaimProcessSessionStep: WorkflowStepExecuting {
                 title: tr("原神一键启动", "Genshin One-click Launch")
             )
         )
+        let processes = (try? await gamingService.runningProcesses()) ?? []
+        await runtime.snapshotPreexistingGamePIDs(from: processes)
         await runtime.persistSidecar()
         return WorkflowStepExecution(recoveryHandle: WorkflowRecoveryHandle(
             capabilityID: "process.session"
@@ -980,7 +999,8 @@ private struct GenshinClaimProcessSessionStep: WorkflowStepExecuting {
             processes: processes,
             bottle: bottle,
             signaler: processSignaler,
-            gameProcessNames: names
+            gameProcessNames: names,
+            preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
         )
         await exclusiveLocks.release(key: .processSession(bottle: bottle), runID: context.runID)
         await exclusiveLocks.release(key: .networkGlobalIsolation, runID: context.runID)
@@ -1035,7 +1055,8 @@ private struct GenshinAwaitExitStep: WorkflowStepExecuting {
                 processes,
                 bottle: bottle,
                 additionallyClaimed: await runtime.claimedProcessIDs(),
-                gameProcessNames: names
+                gameProcessNames: names,
+                preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
             )
             await runtime.claimProcessIDs(scoped.map(\.pid))
             await runtime.persistSidecar()
@@ -1043,7 +1064,8 @@ private struct GenshinAwaitExitStep: WorkflowStepExecuting {
                 processes,
                 bottle: bottle,
                 claimedPIDs: await runtime.claimedProcessIDs(),
-                gameProcessNames: names
+                gameProcessNames: names,
+                preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
             )
             if !stillRunning { return .completed }
             try await Task.sleep(for: .seconds(1))
@@ -1071,7 +1093,8 @@ private struct GenshinTerminateResidualsStep: WorkflowStepExecuting {
             processes: processes,
             bottle: bottle,
             signaler: processSignaler,
-            gameProcessNames: names
+            gameProcessNames: names,
+            preexistingGamePIDs: await runtime.preexistingGameProcessIDs()
         )
         if !report.failures.isEmpty {
             throw GenshinWorkflowCoordinatorError.terminationFailed(report.failures.joined(separator: "; "))

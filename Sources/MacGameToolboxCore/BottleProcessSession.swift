@@ -54,14 +54,36 @@ public enum BottleProcessSession {
     }
 
     public static func matches(_ process: SystemProcess, bottle: String) -> Bool {
-        let command = process.command
-        if command.contains("/Bottles/\(bottle)") { return true }
-        if command.contains("/Bottles/\(bottle)/") { return true }
-        let lowered = command.lowercased()
-        if lowered.contains("cxstart") && command.contains("--bottle") && command.contains(bottle) {
-            return true
+        commandContainsBottlePath(process.command, bottle: bottle)
+            || commandContainsBottleFlag(process.command, bottle: bottle)
+    }
+
+    /// `/Bottles/P3R` must not match `/Bottles/P3R Demo`.
+    private static func commandContainsBottlePath(_ command: String, bottle: String) -> Bool {
+        let marker = "/Bottles/\(bottle)"
+        var search = command.startIndex
+        while let range = command.range(of: marker, range: search..<command.endIndex) {
+            if range.upperBound == command.endIndex {
+                return true
+            }
+            let next = command[range.upperBound]
+            if next == "/" || next == "\\" || next.isWhitespace || next == "\"" {
+                return true
+            }
+            search = command.index(after: range.lowerBound)
         }
         return false
+    }
+
+    /// `--bottle P3R` must not match `--bottle P3R Demo`.
+    private static func commandContainsBottleFlag(_ command: String, bottle: String) -> Bool {
+        guard command.localizedCaseInsensitiveContains("cxstart") else { return false }
+        let tokens = command.split { $0.isWhitespace }.map(String.init)
+        guard let flagIndex = tokens.firstIndex(of: "--bottle"), flagIndex + 1 < tokens.count else {
+            return false
+        }
+        let name = tokens[(flagIndex + 1)...].prefix { !$0.hasPrefix("-") }.joined(separator: " ")
+        return name == bottle
     }
 
     public static func isProtected(_ process: SystemProcess) -> Bool {
@@ -101,17 +123,54 @@ public enum BottleProcessSession {
         }
     }
 
+    public static func gameExecutablePIDs(_ processes: [SystemProcess], names: [String]) -> Set<Int32> {
+        Set(processes.filter { matchesGameExecutable($0, names: names) }.map(\.pid))
+    }
+
+    /// Game executables that belong to this run — not a same-named process
+    /// that was already alive when the bottle session was claimed.
+    ///
+    /// P3R and P3R Demo both use `P3R.exe`. A global name match would claim
+    /// the already-running bottle before the newly launched process exists.
+    public static func thisRunGameProcesses(
+        _ processes: [SystemProcess],
+        bottle: String,
+        claimedPIDs: Set<Int32> = [],
+        gameProcessNames: [String],
+        preexistingGamePIDs: Set<Int32> = []
+    ) -> [SystemProcess] {
+        scopedProcesses(
+            processes,
+            bottle: bottle,
+            additionallyClaimed: claimedPIDs,
+            gameProcessNames: gameProcessNames,
+            preexistingGamePIDs: preexistingGamePIDs
+        )
+        .filter { process in
+            matchesGameExecutable(process, names: gameProcessNames)
+                && !preexistingGamePIDs.contains(process.pid)
+        }
+    }
+
     public static func scopedProcesses(
         _ processes: [SystemProcess],
         bottle: String,
         additionallyClaimed: Set<Int32> = [],
-        gameProcessNames: [String] = []
+        gameProcessNames: [String] = [],
+        preexistingGamePIDs: Set<Int32> = []
     ) -> [SystemProcess] {
         var pids = Set(processes.filter { matches($0, bottle: bottle) && !isProtected($0) }.map(\.pid))
-        pids.formUnion(additionallyClaimed.filter { $0 > 1 })
-        pids.formUnion(
-            processes.filter { matchesGameExecutable($0, names: gameProcessNames) }.map(\.pid)
-        )
+        pids.formUnion(additionallyClaimed.filter { $0 > 1 && !preexistingGamePIDs.contains($0) })
+        for process in processes where matchesGameExecutable(process, names: gameProcessNames) {
+            if pids.contains(process.pid) { continue }
+            if process.command.contains("/Bottles/") { continue }
+            // Detached Wine processes lose the bottle path. Only claim ones that
+            // appeared after this run started, so a sibling bottle's P3R.exe is
+            // not stolen by P3R Demo (or the reverse).
+            if !preexistingGamePIDs.contains(process.pid) {
+                pids.insert(process.pid)
+            }
+        }
         var added = true
         while added {
             added = false
@@ -131,13 +190,15 @@ public enum BottleProcessSession {
         bottle: String,
         additionallyClaimed: Set<Int32> = [],
         gameProcessNames: [String] = [],
+        preexistingGamePIDs: Set<Int32> = [],
         limit: Int = 64
     ) -> [Int32] {
         let pids = scopedProcesses(
             processes,
             bottle: bottle,
             additionallyClaimed: additionallyClaimed,
-            gameProcessNames: gameProcessNames
+            gameProcessNames: gameProcessNames,
+            preexistingGamePIDs: preexistingGamePIDs
         )
         .filter(isTerminatable)
         .map(\.pid)
@@ -146,13 +207,21 @@ public enum BottleProcessSession {
 
     public static func gameStillRunning(
         _ processes: [SystemProcess],
-        bottle _: String,
-        claimedPIDs _: Set<Int32>,
-        gameProcessNames: [String]
+        bottle: String,
+        claimedPIDs: Set<Int32>,
+        gameProcessNames: [String],
+        preexistingGamePIDs: Set<Int32> = []
     ) -> Bool {
         // cxstart / wine command lines mention YuanShen.exe as an argument
-        // long after the player has quit. Only the process identity counts.
-        processes.contains { matchesGameExecutable($0, names: gameProcessNames) }
+        // long after the player has quit. Only this run's executable identity
+        // counts — a sibling bottle's same-named exe is ignored.
+        !thisRunGameProcesses(
+            processes,
+            bottle: bottle,
+            claimedPIDs: claimedPIDs,
+            gameProcessNames: gameProcessNames,
+            preexistingGamePIDs: preexistingGamePIDs
+        ).isEmpty
     }
 
     public static func terminate(
@@ -161,6 +230,7 @@ public enum BottleProcessSession {
         bottle: String,
         signaler: any ProcessSignaling,
         gameProcessNames: [String] = [],
+        preexistingGamePIDs: Set<Int32> = [],
         selfPID: Int32 = ProcessInfo.processInfo.processIdentifier,
         graceNanoseconds: UInt64 = 1_500_000_000
     ) async -> ProcessTerminationReport {
@@ -168,7 +238,8 @@ public enum BottleProcessSession {
             processes,
             bottle: bottle,
             additionallyClaimed: claimedPIDs,
-            gameProcessNames: gameProcessNames
+            gameProcessNames: gameProcessNames,
+            preexistingGamePIDs: preexistingGamePIDs
         )
         .filter { isTerminatable($0) && $0.pid != selfPID }
 
