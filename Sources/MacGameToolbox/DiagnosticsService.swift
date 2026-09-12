@@ -38,7 +38,7 @@ actor DiagnosticsService {
     }
 
     private func relevantProcesses() async -> String {
-        guard let result = try? await runner.run("/bin/ps", arguments: ["-axo", "pid=,ppid=,command="]) else { return "Unable to read process list" }
+        guard let result = try? await runner.run("/bin/ps", arguments: ["-axww", "-o", "pid=,ppid=,command="]) else { return "Unable to read process list" }
         let lines = result.outputString.components(separatedBy: .newlines).filter {
             let value = $0.lowercased()
             return value.contains("crossover") || value.contains("wine")

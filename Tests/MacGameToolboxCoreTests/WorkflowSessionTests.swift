@@ -141,6 +141,116 @@ actor AdjustableGameModeRunner: CommandRunning {
     #expect(BottleProcessSession.boostablePIDs(processes, bottle: genshin) == [20, 30, 40])
 }
 
+@Test func gameStillRunningUsesExecutableIdentityNotLauncherArguments() {
+    let genshin = "原神（国服）"
+    let launcher = SystemProcess(
+        pid: 20,
+        parentPID: 10,
+        command: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart --bottle \(genshin) -- Y:\\Games\\Genshin Impact Game\\YuanShen.exe"
+    )
+    let hungGame = SystemProcess(
+        pid: 99,
+        parentPID: 1,
+        command: #"C:\Genshin Impact Game\YuanShen.exe"#,
+        comm: "YuanShen.exe"
+    )
+    let winePreloader = SystemProcess(
+        pid: 80,
+        parentPID: 1,
+        command: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine64-preloader",
+        comm: "YuanShen.exe"
+    )
+
+    #expect(BottleProcessSession.matchesGameExecutable(hungGame, names: ["YuanShen.exe"]))
+    #expect(BottleProcessSession.matchesGameExecutable(winePreloader, names: ["YuanShen.exe"]))
+    #expect(!BottleProcessSession.matchesGameExecutable(launcher, names: ["YuanShen.exe"]))
+
+    #expect(
+        !BottleProcessSession.gameStillRunning(
+            [launcher],
+            bottle: genshin,
+            claimedPIDs: [20],
+            gameProcessNames: ["YuanShen.exe"]
+        )
+    )
+    #expect(
+        BottleProcessSession.gameStillRunning(
+            [launcher, hungGame],
+            bottle: genshin,
+            claimedPIDs: [20],
+            gameProcessNames: ["YuanShen.exe"]
+        )
+    )
+}
+
+@Test func terminateForceKillsDetachedGameExecutableWithoutBottlePath() async {
+    let genshin = "原神（国服）"
+    let processes = [
+        SystemProcess(pid: 10, parentPID: 1, command: "/Applications/CrossOver.app/Contents/MacOS/CrossOver"),
+        SystemProcess(
+            pid: 20,
+            parentPID: 10,
+            command: "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart --bottle \(genshin) -- Y:\\Games\\YuanShen.exe"
+        ),
+        SystemProcess(
+            pid: 99,
+            parentPID: 1,
+            command: #"C:\Genshin Impact Game\YuanShen.exe"#,
+            comm: "YuanShen.exe"
+        )
+    ]
+    let signaler = RecordingProcessSignaler(alive: [10, 20, 99])
+    let report = await BottleProcessSession.terminate(
+        claimedPIDs: [],
+        processes: processes,
+        bottle: genshin,
+        signaler: signaler,
+        gameProcessNames: ["YuanShen.exe"],
+        selfPID: 7,
+        graceNanoseconds: 0
+    )
+
+    #expect(Set(report.requested) == [20, 99])
+    #expect(report.remaining.isEmpty)
+    #expect(report.failures.isEmpty)
+    #expect(signaler.signals.contains(where: { $0.0 == SIGKILL && $0.1 == 99 }))
+    #expect(!signaler.signals.contains(where: { $0.1 == 10 }))
+    let firstGameSignal = signaler.signals.first { $0.1 == 99 }
+    #expect(firstGameSignal?.0 == SIGKILL)
+}
+
+@Test func crossOverBottleShutdownTargetsTheBoundPrefix() {
+    var invoked: (URL, URL)?
+    CrossOverBottleShutdown.requestWineserverExit(
+        applicationPath: "/Applications/CrossOver.app",
+        bottle: "原神（国服）",
+        fileManager: .default,
+        homeURL: URL(fileURLWithPath: "/Users/test"),
+        run: { wineserver, prefix in invoked = (wineserver, prefix) }
+    )
+    #expect(invoked == nil)
+
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let wineserver = root.appendingPathComponent("Contents/SharedSupport/CrossOver/bin/wineserver")
+    try? fileManager.createDirectory(at: wineserver.deletingLastPathComponent(), withIntermediateDirectories: true)
+    fileManager.createFile(atPath: wineserver.path, contents: Data())
+    try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wineserver.path)
+    defer { try? fileManager.removeItem(at: root) }
+
+    CrossOverBottleShutdown.requestWineserverExit(
+        applicationPath: root.path,
+        bottle: "原神（国服）",
+        fileManager: fileManager,
+        homeURL: URL(fileURLWithPath: "/Users/test"),
+        run: { wineserverURL, prefix in invoked = (wineserverURL, prefix) }
+    )
+    #expect(invoked?.0 == wineserver)
+    #expect(
+        invoked?.1 == URL(fileURLWithPath: "/Users/test/Library/Application Support/CrossOver/Bottles/原神（国服）", isDirectory: true)
+    )
+}
+
 private final class RecordingProcessSignaler: ProcessSignaling, @unchecked Sendable {
     var alive: Set<Int32>
     private(set) var signals: [(Int32, Int32)] = []

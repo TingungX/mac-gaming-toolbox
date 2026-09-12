@@ -127,14 +127,17 @@ public actor GamingService {
     }
 
     public func wineProcesses(crossOverOnly: Bool = false) async throws -> [(pid: Int32, command: String)] {
-        let result = try await runner.run("/bin/ps", arguments: ["-axo", "pid=,ppid=,command="])
-        return Self.matchingProcesses(Self.parseProcessTable(result.outputString), crossOverOnly: crossOverOnly)
+        let result = try await runner.run("/bin/ps", arguments: ["-axww", "-o", "pid=,ppid=,command="])
+        return Self.matchingProcesses(
+            Self.parseProcessTable(result.outputString, resolveLiveComm: true),
+            crossOverOnly: crossOverOnly
+        )
             .map { ($0.pid, $0.command) }
     }
 
     public func runningProcesses() async throws -> [SystemProcess] {
-        let result = try await runner.run("/bin/ps", arguments: ["-axo", "pid=,ppid=,command="])
-        return Self.parseProcessTable(result.outputString)
+        let result = try await runner.run("/bin/ps", arguments: ["-axww", "-o", "pid=,ppid=,command="])
+        return Self.parseProcessTable(result.outputString, resolveLiveComm: true)
             .filter { $0.pid > 1 && !$0.command.lowercased().contains("macgametoolbox") }
             .sorted { $0.command.localizedStandardCompare($1.command) == .orderedAscending }
     }
@@ -158,11 +161,17 @@ public actor GamingService {
         try? await privileged.perform(.removeHoYoHosts)
     }
 
-    public static func parseProcessTable(_ text: String) -> [SystemProcess] {
+    public static func parseProcessTable(_ text: String, resolveLiveComm: Bool = false) -> [SystemProcess] {
         text.split(separator: "\n").compactMap { line in
             let fields = line.split(maxSplits: 2, whereSeparator: { $0 == " " || $0 == "\t" })
             guard fields.count == 3, let pid = Int32(fields[0]), let parentPID = Int32(fields[1]) else { return nil }
-            return SystemProcess(pid: pid, parentPID: parentPID, command: String(fields[2]))
+            let command = String(fields[2])
+            return SystemProcess(
+                pid: pid,
+                parentPID: parentPID,
+                command: command,
+                comm: resolveLiveComm ? ProcessCommResolver.live(pid) : nil
+            )
         }
     }
 
@@ -183,10 +192,16 @@ public actor GamingService {
         return processes.filter { process in
             let value = process.command.lowercased()
             guard !value.contains("macgametoolbox") else { return false }
-            let isWine = value.contains("wine") || value.contains("wineserver") || value.contains("winedevice")
-            if !crossOverOnly { return isWine }
+            let isWine = value.contains("wine")
+                || value.contains("wineserver")
+                || value.contains("winedevice")
+            let isWindowsExecutable = process.comm.lowercased().hasSuffix(".exe")
+                || BottleProcessSession.executableLeafName(process.command).lowercased().hasSuffix(".exe")
+            if !crossOverOnly { return isWine || isWindowsExecutable }
             // Wine services commonly detach from CrossOver and are re-parented to
-            // launchd. If the CrossOver root has exited, retain Wine detection.
+            // launchd. Windows executables keep a .exe comm even when the Unix
+            // command no longer contains the bottle path or the word "wine".
+            if isWindowsExecutable { return true }
             return roots.isEmpty ? isWine : descendants.contains(process.pid) || (value.contains("crossover") && isWine)
         }
     }

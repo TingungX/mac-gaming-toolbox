@@ -350,10 +350,18 @@ private actor DirectLaunchRunContext {
     }
 
     func bottleName() throws -> String {
+        try crossOverBinding().bottleName
+    }
+
+    func applicationPath() throws -> String {
+        try crossOverBinding().applicationPath
+    }
+
+    private func crossOverBinding() throws -> CrossOverGameBinding {
         guard case .crossOver(let binding) = installation.launchBinding else {
             throw DirectLaunchWorkflowError.invalidInstallation(profile.displayName)
         }
-        return binding.bottleName
+        return binding
     }
 
     func displayName() -> String { profile.displayName }
@@ -570,7 +578,7 @@ private struct DirectLaunchAwaitProcessStep: WorkflowStepExecuting {
         }
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.waitingForProcess, progress: 0.55)
-        let bottle = try await runtime.bottleName()
+        _ = try await runtime.bottleName()
         let names = await runtime.processNames()
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(input.timeoutSeconds))
@@ -578,14 +586,7 @@ private struct DirectLaunchAwaitProcessStep: WorkflowStepExecuting {
         while clock.now < deadline {
             try Task.checkCancellation()
             let processes = try await gamingService.runningProcesses()
-            let scoped = BottleProcessSession.scopedProcesses(
-                processes,
-                bottle: bottle,
-                additionallyClaimed: await runtime.claimedProcessIDs()
-            )
-            let matched = scoped.filter { process in
-                names.contains { process.command.localizedCaseInsensitiveContains($0) }
-            }
+            let matched = processes.filter { BottleProcessSession.matchesGameExecutable($0, names: names) }
             if !matched.isEmpty {
                 await runtime.claimProcessIDs(matched.map(\.pid))
                 await runtime.persistSidecar()
@@ -613,7 +614,8 @@ private struct DirectLaunchQoSStep: WorkflowStepExecuting {
         let pids = BottleProcessSession.boostablePIDs(
             processes,
             bottle: bottle,
-            additionallyClaimed: await runtime.claimedProcessIDs()
+            additionallyClaimed: await runtime.claimedProcessIDs(),
+            gameProcessNames: await runtime.processNames()
         )
         guard !pids.isEmpty else {
             throw DirectLaunchWorkflowError.gameProcessNotFound(await runtime.displayName())
@@ -665,12 +667,18 @@ private struct DirectLaunchClaimProcessSessionStep: WorkflowStepExecuting {
             return
         }
         let bottle = try await runtime.bottleName()
+        let names = await runtime.processNames()
+        CrossOverBottleShutdown.requestWineserverExit(
+            applicationPath: try await runtime.applicationPath(),
+            bottle: bottle
+        )
         let processes = (try? await gamingService.runningProcesses()) ?? []
         let report = await BottleProcessSession.terminate(
             claimedPIDs: await runtime.claimedProcessIDs(),
             processes: processes,
             bottle: bottle,
-            signaler: processSignaler
+            signaler: processSignaler,
+            gameProcessNames: names
         )
         await exclusiveLocks.release(key: .processSession(bottle: bottle), runID: context.runID)
         await runtime.removeSidecar()
@@ -723,7 +731,8 @@ private struct DirectLaunchAwaitExitStep: WorkflowStepExecuting {
             let scoped = BottleProcessSession.scopedProcesses(
                 processes,
                 bottle: bottle,
-                additionallyClaimed: await runtime.claimedProcessIDs()
+                additionallyClaimed: await runtime.claimedProcessIDs(),
+                gameProcessNames: names
             )
             await runtime.claimProcessIDs(scoped.map(\.pid))
             await runtime.persistSidecar()
@@ -748,12 +757,18 @@ private struct DirectLaunchTerminateResidualsStep: WorkflowStepExecuting {
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.terminatingResiduals, progress: 0.96)
         let bottle = try await runtime.bottleName()
+        let names = await runtime.processNames()
+        CrossOverBottleShutdown.requestWineserverExit(
+            applicationPath: try await runtime.applicationPath(),
+            bottle: bottle
+        )
         let processes = try await gamingService.runningProcesses()
         let report = await BottleProcessSession.terminate(
             claimedPIDs: await runtime.claimedProcessIDs(),
             processes: processes,
             bottle: bottle,
-            signaler: processSignaler
+            signaler: processSignaler,
+            gameProcessNames: names
         )
         if !report.failures.isEmpty {
             throw DirectLaunchWorkflowError.terminationFailed(report.failures.joined(separator: "; "))

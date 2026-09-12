@@ -931,7 +931,7 @@ final class AppModel: ObservableObject {
         case .claimingGameMode:
             message = tr("正在由本工作流占用 Game Mode", "Claiming Game Mode for this workflow")
         case .waitingForExit:
-            message = tr("原神运行中，关闭游戏后将自动收尾", "Genshin is running; teardown starts when the game exits")
+            message = tr("原神运行中；正常退出后自动收尾，卡住时请点结束工作流以强制结束 YuanShen.exe", "Genshin is running; teardown starts when the executable exits, or use End Workflow to force-quit a hung YuanShen.exe")
         case .terminatingResiduals:
             message = tr("正在结束本容器中的残留进程", "Terminating residual processes in this bottle")
         case .releasingGameMode:
@@ -978,7 +978,7 @@ final class AppModel: ObservableObject {
         case .claimingGameMode:
             message = tr("正在由本工作流占用 Game Mode", "Claiming Game Mode for this workflow")
         case .waitingForExit:
-            message = tr("\(name) 运行中，关闭游戏后将自动收尾", "\(name) is running; teardown starts when the game exits")
+            message = tr("\(name) 运行中；正常退出后自动收尾，卡住时请点结束工作流强制结束游戏进程", "\(name) is running; teardown starts when the executable exits, or use End Workflow to force-quit a hung game process")
         case .terminatingResiduals:
             message = tr("正在结束本容器中的残留进程", "Terminating residual processes in this bottle")
         case .releasingGameMode:
