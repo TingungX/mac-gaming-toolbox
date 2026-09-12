@@ -185,6 +185,16 @@ import Testing
     #expect(GamingService.matchingProcesses(processes, crossOverOnly: true).map(\.pid) == [100, 110, 120])
 }
 
+@Test func processParserFindsDetachedWindowsGameWhileCrossOverGUIIsRunning() {
+    let processes = [
+        SystemProcess(pid: 100, parentPID: 1, command: "/Applications/CrossOver 25.app/Contents/MacOS/CrossOver"),
+        SystemProcess(pid: 200, parentPID: 1, command: #"C:\Genshin Impact Game\YuanShen.exe"#, comm: "YuanShen.exe"),
+        SystemProcess(pid: 300, parentPID: 1, command: "unrelated")
+    ]
+    #expect(GamingService.matchingProcesses(processes, crossOverOnly: true).map(\.pid) == [100, 200])
+    #expect(GamingService.matchingProcesses(processes, crossOverOnly: false).map(\.pid) == [200])
+}
+
 @Test func processParserFindsDetachedCrossOverWineServices() {
     let text = "  3949 1 C:\\windows\\system32\\winedevice.exe\n  3950 1 C:\\windows\\system32\\wineserver.exe"
     let processes = GamingService.parseProcessTable(text)

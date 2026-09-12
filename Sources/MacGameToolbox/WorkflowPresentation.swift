@@ -65,13 +65,13 @@ enum DirectLaunchWorkflowPresentation {
             WorkflowStepPreview(
                 id: "await-exit",
                 title: tr("跟踪至退出", "Track until exit"),
-                detail: tr("等待本容器中的 \(name) 进程退出", "Wait until the \(name) process in this bottle exits"),
+                detail: tr("等待已绑定的 \(name) 可执行文件退出，而不是启动器命令行里的名字", "Wait until the bound \(name) executable itself exits, not a launcher command line"),
                 icon: "eye.circle"
             ),
             WorkflowStepPreview(
                 id: "terminate-residuals",
                 title: tr("结束残留进程", "Terminate residuals"),
-                detail: tr("只终止本 run 声称的容器进程", "Terminate only processes claimed by this run"),
+                detail: tr("强制结束挂起的游戏进程并清理本容器 Wine 进程", "Force-quit a hung game process and clean up this bottle's Wine processes"),
                 icon: "xmark.circle"
             ),
             WorkflowStepPreview(

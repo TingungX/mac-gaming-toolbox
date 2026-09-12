@@ -74,11 +74,28 @@ public struct SystemProcess: Identifiable, Hashable, Sendable {
     public let pid: Int32
     public let parentPID: Int32
     public let command: String
+    /// `p_comm` / Activity Monitor name. Wine often sets this to `YuanShen.exe`
+    /// while `command` remains `wine64-preloader` or a Windows path.
+    public let comm: String
 
-    public init(pid: Int32, parentPID: Int32, command: String) {
+    public init(pid: Int32, parentPID: Int32, command: String, comm: String? = nil) {
         self.pid = pid
         self.parentPID = parentPID
         self.command = command
+        let inferred = Self.inferredComm(from: command)
+        if let comm, !comm.isEmpty {
+            self.comm = comm
+        } else {
+            self.comm = inferred
+        }
+    }
+
+    public static func inferredComm(from command: String) -> String {
+        let argv0 = command.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" })
+            .first
+            .map(String.init) ?? command
+        let trimmed = argv0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return trimmed.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? trimmed
     }
 }
 

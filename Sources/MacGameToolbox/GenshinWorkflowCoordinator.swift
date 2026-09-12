@@ -63,8 +63,8 @@ actor GenshinWorkflowCoordinator: GenshinWorkflowCoordinating {
         WorkflowStepPreview(id: "restore-network", title: tr("恢复网络", "Restore network"), detail: tr("通过同一恢复句柄恢复网络连通性", "Restore connectivity through the same recovery handle"), icon: "network"),
         WorkflowStepPreview(id: "apply-qos", title: tr("优化进程", "Optimize processes"), detail: tr("提升已识别的游戏进程优先级", "Boost the identified game process tree"), icon: "bolt.fill"),
         WorkflowStepPreview(id: "claim-game-mode", title: tr("占用 Game Mode", "Claim Game Mode"), detail: tr("由本 run 占用全局 Game Mode；最后释放者才恢复原策略", "This run claims global Game Mode; the last releaser restores the previous policy"), icon: "flag.checkered"),
-        WorkflowStepPreview(id: "await-exit", title: tr("跟踪至退出", "Track until exit"), detail: tr("等待本容器中的原神进程退出", "Wait until the Genshin process in this bottle exits"), icon: "eye.circle"),
-        WorkflowStepPreview(id: "terminate-residuals", title: tr("结束残留进程", "Terminate residuals"), detail: tr("只终止本 run 声称的容器进程", "Terminate only processes claimed by this run"), icon: "xmark.circle"),
+        WorkflowStepPreview(id: "await-exit", title: tr("跟踪至退出", "Track until exit"), detail: tr("等待原神可执行文件退出，而不是 cxstart 命令行里的名字", "Wait until the Genshin executable itself exits, not a launcher command line"), icon: "eye.circle"),
+        WorkflowStepPreview(id: "terminate-residuals", title: tr("结束残留进程", "Terminate residuals"), detail: tr("强制结束挂起的 YuanShen.exe 并清理本容器 Wine 进程", "Force-quit a hung YuanShen.exe and clean up this bottle's Wine processes"), icon: "xmark.circle"),
         WorkflowStepPreview(id: "release-game-mode", title: tr("交还 Game Mode", "Release Game Mode"), detail: tr("释放本 run 的 claim；无其他持有者时恢复自动策略", "Release this run's claim and restore auto when no holders remain"), icon: "flag")
     ]
 
@@ -431,10 +431,30 @@ private actor GenshinRunContext {
     }
 
     func bottleName() throws -> String {
+        try crossOverBinding().bottleName
+    }
+
+    func applicationPath() throws -> String {
+        try crossOverBinding().applicationPath
+    }
+
+    private func crossOverBinding() throws -> CrossOverGameBinding {
         guard case .crossOver(let binding) = installation.launchBinding else {
             throw GenshinWorkflowCoordinatorError.invalidInstallation
         }
-        return binding.bottleName
+        return binding
+    }
+
+    func gameProcessNames() -> [String] {
+        var names = ["YuanShen.exe"]
+        if case .crossOver(let binding) = installation.launchBinding {
+            let leaf = BottleProcessSession.executableLeafName(binding.executablePath)
+            if !leaf.isEmpty {
+                names.append(leaf)
+            }
+        }
+        var seen = Set<String>()
+        return names.filter { seen.insert($0.lowercased()).inserted }
     }
 
     func claimedProcessIDs() -> Set<Int32> { claimedPIDs }
@@ -890,16 +910,21 @@ private struct GenshinQoSStep: WorkflowStepExecuting {
     func execute(context: WorkflowStepContext) async throws -> WorkflowStepExecution {
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.applyingQoS, progress: 0.9)
-        let processes = try await gamingService.wineProcesses(crossOverOnly: true)
-        let genshinProcesses = processes.filter {
-            $0.command.localizedCaseInsensitiveContains("YuanShen.exe")
-        }
-        guard !genshinProcesses.isEmpty else {
+        let processes = try await gamingService.runningProcesses()
+        let bottle = try await runtime.bottleName()
+        let names = await runtime.gameProcessNames()
+        let pids = BottleProcessSession.boostablePIDs(
+            processes,
+            bottle: bottle,
+            additionallyClaimed: await runtime.claimedProcessIDs(),
+            gameProcessNames: names
+        )
+        guard !pids.isEmpty else {
             throw GenshinWorkflowCoordinatorError.gameProcessNotFound
         }
-        await runtime.claimProcessIDs(genshinProcesses.map(\.pid))
+        await runtime.claimProcessIDs(pids)
         await runtime.persistSidecar()
-        try await privileged.perform(.renice(genshinProcesses.map(\.pid)))
+        try await privileged.perform(.renice(pids))
         return .completed
     }
 }
@@ -944,12 +969,18 @@ private struct GenshinClaimProcessSessionStep: WorkflowStepExecuting {
             return
         }
         let bottle = try await runtime.bottleName()
+        let names = await runtime.gameProcessNames()
+        CrossOverBottleShutdown.requestWineserverExit(
+            applicationPath: try await runtime.applicationPath(),
+            bottle: bottle
+        )
         let processes = (try? await gamingService.runningProcesses()) ?? []
         let report = await BottleProcessSession.terminate(
             claimedPIDs: await runtime.claimedProcessIDs(),
             processes: processes,
             bottle: bottle,
-            signaler: processSignaler
+            signaler: processSignaler,
+            gameProcessNames: names
         )
         await exclusiveLocks.release(key: .processSession(bottle: bottle), runID: context.runID)
         await exclusiveLocks.release(key: .networkGlobalIsolation, runID: context.runID)
@@ -996,13 +1027,15 @@ private struct GenshinAwaitExitStep: WorkflowStepExecuting {
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.waitingForExit, progress: 0.94)
         let bottle = try await runtime.bottleName()
+        let names = await runtime.gameProcessNames()
         while true {
             try Task.checkCancellation()
             let processes = try await gamingService.runningProcesses()
             let scoped = BottleProcessSession.scopedProcesses(
                 processes,
                 bottle: bottle,
-                additionallyClaimed: await runtime.claimedProcessIDs()
+                additionallyClaimed: await runtime.claimedProcessIDs(),
+                gameProcessNames: names
             )
             await runtime.claimProcessIDs(scoped.map(\.pid))
             await runtime.persistSidecar()
@@ -1010,7 +1043,7 @@ private struct GenshinAwaitExitStep: WorkflowStepExecuting {
                 processes,
                 bottle: bottle,
                 claimedPIDs: await runtime.claimedProcessIDs(),
-                gameProcessNames: ["YuanShen.exe"]
+                gameProcessNames: names
             )
             if !stillRunning { return .completed }
             try await Task.sleep(for: .seconds(1))
@@ -1027,12 +1060,18 @@ private struct GenshinTerminateResidualsStep: WorkflowStepExecuting {
         let runtime = try await runtimeStore.context(for: context.runID)
         await runtime.report(.terminatingResiduals, progress: 0.97)
         let bottle = try await runtime.bottleName()
+        let names = await runtime.gameProcessNames()
+        CrossOverBottleShutdown.requestWineserverExit(
+            applicationPath: try await runtime.applicationPath(),
+            bottle: bottle
+        )
         let processes = try await gamingService.runningProcesses()
         let report = await BottleProcessSession.terminate(
             claimedPIDs: await runtime.claimedProcessIDs(),
             processes: processes,
             bottle: bottle,
-            signaler: processSignaler
+            signaler: processSignaler,
+            gameProcessNames: names
         )
         if !report.failures.isEmpty {
             throw GenshinWorkflowCoordinatorError.terminationFailed(report.failures.joined(separator: "; "))

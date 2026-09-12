@@ -207,3 +207,47 @@ public struct CrossOverLaunchAdapter: Sendable {
         )
     }
 }
+
+/// Asks a bottle's wineserver to tear down its Windows processes. This is the
+/// CrossOver-supported way to force-quit a hung `YuanShen.exe` after an in-game
+/// exit; PID signals remain as a follow-up for anything that survives.
+public enum CrossOverBottleShutdown {
+    public static func wineserverURL(applicationPath: String) -> URL {
+        URL(fileURLWithPath: applicationPath)
+            .appendingPathComponent("Contents/SharedSupport/CrossOver/bin/wineserver")
+    }
+
+    public static func winePrefix(
+        bottle: String,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        homeURL.appendingPathComponent(
+            "Library/Application Support/CrossOver/Bottles/\(bottle)",
+            isDirectory: true
+        )
+    }
+
+    public static func requestWineserverExit(
+        applicationPath: String,
+        bottle: String,
+        fileManager: FileManager = .default,
+        homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+        run: (URL, URL) -> Void = { wineserver, prefix in
+            let process = Process()
+            process.executableURL = wineserver
+            process.arguments = ["-k"]
+            var environment = ProcessInfo.processInfo.environment
+            environment["WINEPREFIX"] = prefix.path
+            process.environment = environment
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+            try? process.run()
+            process.waitUntilExit()
+        }
+    ) {
+        let wineserver = wineserverURL(applicationPath: applicationPath)
+        let prefix = winePrefix(bottle: bottle, homeURL: homeURL)
+        guard fileManager.isExecutableFile(atPath: wineserver.path) else { return }
+        run(wineserver, prefix)
+    }
+}
